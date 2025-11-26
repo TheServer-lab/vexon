@@ -1,0 +1,15 @@
+# Vexon Language Requirements
+# ---------------------------
+# Install using:
+#     npm install
+# Or manually install packages listed below.
+
+# Required packages for Vexon CLI
+colors
+prompt-sync
+
+# Required for building Windows EXE files
+pkg
+
+# Optional developer tools (recommended)
+nodemon

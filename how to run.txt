@@ -1,0 +1,1 @@
+node vexon_cli.js run demo.vx
