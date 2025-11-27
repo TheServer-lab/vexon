@@ -1,8 +1,13 @@
 "use strict";
 /*
-  vexon_core.js — Vexon core with stdlib and robust import handling.
-  Drop this file next to vexon_cli.js. It implements Lexer, Parser,
-  Compiler, and VM with an import cache that safely loads modules.
+  vexon_core.js — Full Vexon core with extended stdlib and robust import handling.
+
+  Features:
+  - Lexer, Parser, Compiler
+  - VM with frames, call stack, async builtin support
+  - Robust IMPORT handling with caching and relative resolution
+  - Many builtins: print, input, fs, json, math, string, number helpers, http, exec, sleep, process helpers
+  - Compile-time function support (fn), control flow, arrays/objects, calls, indexing, properties
 */
 
 const fs = require("fs");
@@ -573,12 +578,12 @@ class VM {
     this.consts = Array.from(consts);
     this.code = Array.from(code);
 
-    // frames: each frame = { code, consts, ip, locals: Map(), baseDir }
+    // frames: each frame = { code, consts, ip, locals: Map(), baseDir, isGlobal }
     this.frames = [];
     this.stack = [];
     this.globals = new Map();
     this.importedFiles = new Set();
-    this.importCache = new Map(); // absolutePath -> moduleObject
+    this.importCache = new Map(); // absolutePath -> moduleObject or Promise
     this.baseDir = options.baseDir || process.cwd();
     this.debug = !!options.debug;
 
@@ -586,7 +591,7 @@ class VM {
   }
 
   setupBuiltins() {
-    // print
+    // Basic printing
     this.globals.set("print", { builtin: true, call: (args) => { console.log(...args.map(a => (a === null ? "null" : a))); return null; } });
 
     // len
@@ -605,7 +610,7 @@ class VM {
       const out = []; for (let i = start; i < end; i++) out.push(i); return out;
     }});
 
-    // push/pop
+    // push/pop helpers
     this.globals.set("push", { builtin: true, call: (args) => { const a = args[0]; a.push(args[1]); return a.length; }});
     this.globals.set("pop", { builtin: true, call: (args) => { const a = args[0]; return a.pop(); }});
 
@@ -629,25 +634,59 @@ class VM {
       }
     }});
 
-    // File system
-    this.globals.set("read", { builtin: true, call: (args) => fs.readFileSync(path.resolve(this.baseDir, String(args[0])), "utf8") });
-    this.globals.set("write", { builtin: true, call: (args) => { fs.writeFileSync(path.resolve(this.baseDir, String(args[0])), String(args[1] ?? ""), "utf8"); return null; }});
-    this.globals.set("append", { builtin: true, call: (args) => { fs.appendFileSync(path.resolve(this.baseDir, String(args[0])), String(args[1] ?? ""), "utf8"); return null; }});
-    this.globals.set("exists", { builtin: true, call: (args) => fs.existsSync(path.resolve(this.baseDir, String(args[0]))) });
-    this.globals.set("delete", { builtin: true, call: (args) => { const full = path.resolve(this.baseDir, String(args[0])); if (fs.existsSync(full)) fs.unlinkSync(full); return null; }});
-    this.globals.set("list", { builtin: true, call: (args) => fs.readdirSync(path.resolve(this.baseDir, args.length ? String(args[0]) : ".")) });
-    this.globals.set("mkdir", { builtin: true, call: (args) => { const full = path.resolve(this.baseDir, String(args[0])); if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true }); return null; }});
+    // ---------------- FILE SYSTEM ----------------
+    this.globals.set("read", { builtin: true, call: (args) => {
+      const p = String(args[0]);
+      return fs.readFileSync(path.resolve(this.baseDir, p), "utf8");
+    }});
+
+    this.globals.set("write", { builtin: true, call: (args) => {
+      const p = String(args[0]); const data = args[1] ?? "";
+      fs.writeFileSync(path.resolve(this.baseDir, p), String(data), "utf8");
+      return null;
+    }});
+
+    this.globals.set("append", { builtin: true, call: (args) => {
+      const p = String(args[0]); const data = args[1] ?? "";
+      fs.appendFileSync(path.resolve(this.baseDir, p), String(data), "utf8");
+      return null;
+    }});
+
+    this.globals.set("exists", { builtin: true, call: (args) => {
+      const p = String(args[0]);
+      return fs.existsSync(path.resolve(this.baseDir, p));
+    }});
+
+    this.globals.set("delete", { builtin: true, call: (args) => {
+      const p = String(args[0]);
+      const full = path.resolve(this.baseDir, p);
+      if (fs.existsSync(full)) fs.unlinkSync(full);
+      return null;
+    }});
+
+    this.globals.set("list", { builtin: true, call: (args) => {
+      const p = args.length ? String(args[0]) : ".";
+      return fs.readdirSync(path.resolve(this.baseDir, p));
+    }});
+
+    this.globals.set("mkdir", { builtin: true, call: (args) => {
+      const p = String(args[0]);
+      const full = path.resolve(this.baseDir, p);
+      if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
+      return null;
+    }});
+
     this.globals.set("cwd", { builtin: true, call: () => process.cwd() });
 
-    // JSON
+    // ---------------- JSON ----------------
     this.globals.set("json_encode", { builtin: true, call: (args) => JSON.stringify(args[0], null, 2) });
     this.globals.set("json_decode", { builtin: true, call: (args) => JSON.parse(String(args[0])) });
 
-    // time / random
+    // ---------------- TIME / RANDOM ----------------
     this.globals.set("time", { builtin: true, call: () => Date.now() });
     this.globals.set("random", { builtin: true, call: () => Math.random() });
 
-    // toString
+    // ---------------- toString ----------------
     this.globals.set("toString", { builtin: true, call: (args) => {
       const obj = args[0];
       if (obj === null) return "null";
@@ -656,7 +695,7 @@ class VM {
       return String(obj);
     }});
 
-    // exec
+    // ---------------- PROCESS EXECUTION ----------------
     this.globals.set("exec", { builtin: true, call: (args) => {
       const cmd = String(args[0]);
       try {
@@ -667,27 +706,31 @@ class VM {
       }
     }});
 
-    // sleep
+    // ---------------- SLEEP (sync) ----------------
     this.globals.set("sleep", { builtin: true, call: (args) => {
       const ms = Number(args[0] ?? 0);
       const sab = new SharedArrayBuffer(4);
       const int32 = new Int32Array(sab);
-      try { Atomics.wait(int32, 0, 0, ms); } catch (e) {}
+      try {
+        Atomics.wait(int32, 0, 0, ms);
+      } catch (e) {}
       return null;
     }});
 
-    // http_get / http_post (async)
+    // ---------------- HTTP CLIENT (async) ----------------
     this.globals.set("http_get", { builtin: true, call: async (args) => {
-      if (!fetchImpl) throw new Error("fetch not available (install node-fetch)");
+      if (!fetchImpl) throw new Error("fetch not available (install node-fetch for older Node)");
       const url = String(args[0]);
       const res = await fetchImpl(url);
       const ct = res.headers && (res.headers.get ? res.headers.get("content-type") : res.headers["content-type"]);
-      if (ct && ct.includes("application/json")) return await res.json();
+      if (ct && ct.includes("application/json")) {
+        return await res.json();
+      }
       return await res.text();
     }});
 
     this.globals.set("http_post", { builtin: true, call: async (args) => {
-      if (!fetchImpl) throw new Error("fetch not available (install node-fetch)");
+      if (!fetchImpl) throw new Error("fetch not available (install node-fetch for older Node)");
       const url = String(args[0]);
       const payload = args[1];
       const res = await fetchImpl(url, { method: "POST", body: typeof payload === "string" ? payload : JSON.stringify(payload), headers: { "Content-Type": "application/json" } });
@@ -695,6 +738,65 @@ class VM {
       if (ct && ct.includes("application/json")) return await res.json();
       return await res.text();
     }});
+
+    // ---------------- Additional helpers (math, string, number, io, process) ----------------
+
+    // Math namespace object (plain object) and callable math.* entries
+    this.globals.set("math", { builtin: false, value: {
+      sin: (v) => Math.sin(Number(v)),
+      cos: (v) => Math.cos(Number(v)),
+      sqrt: (v) => Math.sqrt(Number(v)),
+      abs: (v) => Math.abs(Number(v)),
+      pow: (a, b) => Math.pow(Number(a), Number(b ?? 0))
+    }});
+
+    this.globals.set("math.sin", { builtin: true, call: (args) => Math.sin(Number(args[0])) });
+    this.globals.set("math.cos", { builtin: true, call: (args) => Math.cos(Number(args[0])) });
+    this.globals.set("math.sqrt", { builtin: true, call: (args) => Math.sqrt(Number(args[0])) });
+    this.globals.set("math.abs", { builtin: true, call: (args) => Math.abs(Number(args[0])) });
+    this.globals.set("math.pow", { builtin: true, call: (args) => Math.pow(Number(args[0]), Number(args[1] ?? 0)) });
+
+    // Rounding helpers
+    this.globals.set("round", { builtin: true, call: (args) => Math.round(Number(args[0])) });
+    this.globals.set("floor", { builtin: true, call: (args) => Math.floor(Number(args[0])) });
+    this.globals.set("ceil", { builtin: true, call: (args) => Math.ceil(Number(args[0])) });
+
+    // String helpers
+    this.globals.set("split", { builtin: true, call: (args) => String(args[0]).split(String(args[1] ?? "")) });
+    this.globals.set("indexOf", { builtin: true, call: (args) => String(args[0]).indexOf(String(args[1] ?? "")) });
+    this.globals.set("substring", { builtin: true, call: (args) => String(args[0]).substring(Number(args[1] ?? 0), args.length > 2 ? Number(args[2]) : undefined) });
+    this.globals.set("trim", { builtin: true, call: (args) => String(args[0]).trim() });
+    this.globals.set("toLower", { builtin: true, call: (args) => String(args[0]).toLowerCase() });
+    this.globals.set("toUpper", { builtin: true, call: (args) => String(args[0]).toUpperCase() });
+    this.globals.set("startsWith", { builtin: true, call: (args) => String(args[0]).startsWith(String(args[1] ?? "")) });
+    this.globals.set("endsWith", { builtin: true, call: (args) => String(args[0]).endsWith(String(args[1] ?? "")) });
+    this.globals.set("replace", { builtin: true, call: (args) => String(args[0]).replace(String(args[1] ?? ""), String(args[2] ?? "")) });
+
+    // Number helpers
+    this.globals.set("number", { builtin: true, call: (args) => Number(args[0]) });
+    this.globals.set("parseInt", { builtin: true, call: (args) => parseInt(String(args[0]), args.length > 1 ? Number(args[1]) : 10) });
+    this.globals.set("parseFloat", { builtin: true, call: (args) => parseFloat(String(args[0])) });
+    this.globals.set("isNaN", { builtin: true, call: (args) => Number.isNaN(Number(args[0])) });
+
+    // IO helpers
+    this.globals.set("read_json", { builtin: true, call: (args) => JSON.parse(fs.readFileSync(path.resolve(this.baseDir, String(args[0])), "utf8")) });
+    this.globals.set("write_json", { builtin: true, call: (args) => { fs.writeFileSync(path.resolve(this.baseDir, String(args[0])), JSON.stringify(args[1], null, 2), "utf8"); return null; }});
+    this.globals.set("join_path", { builtin: true, call: (args) => path.join(...args.map(a => String(a))) });
+
+    // Process helpers
+    this.globals.set("env", { builtin: true, call: (args) => {
+      if (args.length === 0) return process.env;
+      return process.env[String(args[0])] ?? null;
+    }});
+    this.globals.set("set_env", { builtin: true, call: (args) => { process.env[String(args[0])] = String(args[1]); return null; }});
+    this.globals.set("argv", { builtin: true, call: () => process.argv.slice(2) });
+
+    // Global setters/getters
+    this.globals.set("global_set", { builtin: true, call: (args) => { this.globals.set(String(args[0]), args[1]); return null; }});
+    this.globals.set("global_get", { builtin: true, call: (args) => this.globals.get(String(args[0])) ?? null });
+
+    // json alias
+    this.globals.set("json", { builtin: true, call: (args) => JSON.stringify(args[0], null, 2) });
   }
 
   // Helper to resolve a name in current frame or globals
@@ -739,9 +841,14 @@ class VM {
             const name = frame.consts[inst.arg];
             // If name is a string constant representing an identifier, try lookup
             if (typeof name === "string") {
-              const val = this.lookup(name);
-              if (val === undefined) this.stack.push(null);
-              else this.stack.push(val);
+              // support dotted math namespace lookup: e.g., math.sin
+              if (name.includes(".") && this.globals.has(name)) {
+                this.stack.push(this.globals.get(name));
+              } else {
+                const val = this.lookup(name);
+                if (val === undefined) this.stack.push(null);
+                else this.stack.push(val);
+              }
             } else {
               // numeric or other constant
               this.stack.push(name);
@@ -752,7 +859,6 @@ class VM {
             const name = frame.consts[inst.arg];
             const val = this.stack.pop();
             // store in nearest frame or global
-            // if in current frame and it's global frame, set global
             if (frame.isGlobal) {
               this.globals.set(name, val);
             } else {
@@ -823,16 +929,22 @@ class VM {
             for (let i = 0; i < argc; i++) args.unshift(this.stack.pop());
             const callee = this.stack.pop();
 
-            // builtin
+            // builtin object with .call
             if (callee && callee.builtin && typeof callee.call === "function") {
               const res = callee.call(args);
               if (res && typeof res.then === "function") {
-                // async builtin
                 const awaited = await res;
                 this.stack.push(awaited);
               } else {
                 this.stack.push(res);
               }
+              break;
+            }
+
+            // If callee is a plain object with value property (like math namespace), not callable
+            if (callee && typeof callee === "object" && !callee.builtin && callee.value) {
+              // not callable
+              this.stack.push(null);
               break;
             }
 
@@ -869,6 +981,18 @@ class VM {
               }
             }
 
+            // If callee is a plain JS function (rare), call it
+            if (typeof callee === "function") {
+              const res = callee(...args);
+              if (res && typeof res.then === "function") {
+                const awaited = await res;
+                this.stack.push(awaited);
+              } else {
+                this.stack.push(res);
+              }
+              break;
+            }
+
             // unknown callee
             this.stack.push(null);
             break;
@@ -901,7 +1025,7 @@ class VM {
           }
 
           case Op.IMPORT: {
-            // robust import implementation
+            // robust import implementation with caching and circular support
             const importFileConst = frame.consts[inst.arg];
             let importPath = String(importFileConst);
 
@@ -912,37 +1036,57 @@ class VM {
             if (!path.extname(resolvedPath)) resolvedPath += ".vx";
             resolvedPath = path.normalize(resolvedPath);
 
-            // If cached, push cached module object
+            // If cached, push cached module object or wait for promise
             if (this.importCache.has(resolvedPath)) {
-              this.stack.push(this.importCache.get(resolvedPath));
-              break;
+              const cached = this.importCache.get(resolvedPath);
+              // support Promise stored during loading
+              if (cached && typeof cached.then === "function") {
+                const moduleObj = await cached;
+                this.stack.push(moduleObj);
+                break;
+              } else {
+                this.stack.push(cached);
+                break;
+              }
             }
 
             if (!fs.existsSync(resolvedPath)) {
               throw new Error("Import failed: file not found: " + resolvedPath);
             }
 
-            // Read and compile imported file
-            const src = fs.readFileSync(resolvedPath, "utf8");
-            const lexer = new Lexer(src);
-            const tokens = lexer.lex();
-            const parser = new Parser(tokens);
-            const stmts = parser.parseProgram();
-            const compiler = new Compiler();
-            const compiled = compiler.compile(stmts);
+            // Create a promise placeholder and store it to handle circular imports
+            const loadPromise = (async () => {
+              const src = fs.readFileSync(resolvedPath, "utf8");
+              const lexer = new Lexer(src);
+              const tokens = lexer.lex();
+              const parser = new Parser(tokens);
+              const stmts = parser.parseProgram();
+              const compiler = new Compiler();
+              const compiled = compiler.compile(stmts);
 
-            // Create child VM and run it
-            const childVM = new VM(compiled.consts, compiled.code, { baseDir: path.dirname(resolvedPath), debug: this.debug });
-            await childVM.run();
+              // Create child VM and run it
+              const childVM = new VM(compiled.consts, compiled.code, { baseDir: path.dirname(resolvedPath), debug: this.debug });
 
-            // Collect exported names from childVM.globals into a plain object
-            const moduleObj = {};
-            for (const [k, v] of childVM.globals.entries()) {
-              moduleObj[k] = v;
-            }
+              // Pre-cache an empty module object to allow circular references during execution
+              const placeholder = {};
+              this.importCache.set(resolvedPath, placeholder);
 
-            // Cache and push module object
-            this.importCache.set(resolvedPath, moduleObj);
+              await childVM.run();
+
+              // Collect exported names from childVM.globals into a plain object
+              const moduleObj = {};
+              for (const [k, v] of childVM.globals.entries()) {
+                moduleObj[k] = v;
+              }
+
+              // Replace placeholder with real module object
+              this.importCache.set(resolvedPath, moduleObj);
+              return moduleObj;
+            })();
+
+            // store promise while loading
+            this.importCache.set(resolvedPath, loadPromise);
+            const moduleObj = await loadPromise;
             this.stack.push(moduleObj);
             break;
           }
