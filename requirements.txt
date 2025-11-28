@@ -3,6 +3,7 @@
 # Install using:
 #     npm install
 # Or manually install packages listed below.
+Node.js
 
 # Required packages for Vexon CLI
 colors
@@ -13,3 +14,4 @@ pkg
 
 # Optional developer tools (recommended)
 nodemon
+
