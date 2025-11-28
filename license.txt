@@ -28,4 +28,4 @@ Inform users of any changes made from the original version.
 This project is provided "as is", without any warranty. The Author is not responsible for any damages, misuse, or consequences resulting from the use of this project.
 
 Example Attribution (for videos, posts, descriptions, etc.):
-Original project by Rick - https://github.com/TheServer-lab/Ricks-Work (Modified version, unofficial)
+Original project by Rick - https://theserver-lab.blogspot.com/ (Modified version, unofficial)
