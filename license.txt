@@ -1,0 +1,31 @@
+TheServer-lab Projects License
+Copyright © TheServer-lab, 2025
+
+This license applies to all random Python projects created by the original author (referred to as "the Author").
+
+✅ You Are Allowed To:
+Use the project for personal, educational, or non-commercial purposes.
+
+Modify the source code.
+
+Share, distribute, or repost the original or modified version of the project freely.
+
+❌ You Must Not:
+Use the project for commercial purposes (no selling, monetization, or profit-making).
+
+Use the project in any way that violates laws, regulations, or the Terms of Service (TOS) of other platforms or companies.
+
+Present modified versions as official or original without proper notice.
+
+📌 You Must:
+Give proper credit to the Author in any redistribution, documentation, or public display of the project.
+
+Clearly state if the project has been modified, including a note that it is an "unofficial modified version" and is "not affiliated with the original author."
+
+Inform users of any changes made from the original version.
+
+🛡 Disclaimer:
+This project is provided "as is", without any warranty. The Author is not responsible for any damages, misuse, or consequences resulting from the use of this project.
+
+Example Attribution (for videos, posts, descriptions, etc.):
+Original project by Rick - https://github.com/TheServer-lab/Ricks-Work (Modified version, unofficial)
