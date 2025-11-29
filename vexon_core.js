@@ -1,24 +1,23 @@
 "use strict";
 /*
-  vexon_core.js — Full Vexon core with extended stdlib and robust import handling.
+  vexon_core.js — Updated with Exception Handling (try/catch)
 
-  Features:
-  - Lexer, Parser, Compiler
-  - VM with frames, call stack, async builtin support
-  - Robust IMPORT handling with caching and relative resolution
-  - Many builtins: print, input, fs, json, math, string, number helpers, http, exec, sleep, process helpers
-  - Compile-time function support (fn), control flow, arrays/objects, calls, indexing, properties
+  Updates:
+  - Lexer: Added 'try', 'catch', 'throw' keywords
+  - Parser: Added parseTry() and parseThrow()
+  - Compiler: Added TRY_PUSH, TRY_POP opcodes
+  - VM: Implemented error unwinding and catch blocks
 */
 
 const fs = require("fs");
 const path = require("path");
 const child_process = require("child_process");
 
-// Optional readline-sync for nicer input()
+// Optional readline-sync
 let readlineSync = null;
 try { readlineSync = require("readline-sync"); } catch (e) { readlineSync = null; }
 
-// node-fetch fallback for older Node versions if fetch not present
+// node-fetch fallback
 let fetchImpl = globalThis.fetch;
 if (!fetchImpl) {
   try { fetchImpl = require("node-fetch"); } catch (e) { fetchImpl = null; }
@@ -71,7 +70,8 @@ class Lexer {
       if (isAlpha(c)) {
         let id = "";
         while (!this.eof() && /[A-Za-z0-9_]/.test(this.peek())) id += this.next();
-        if (["true","false","null","in","for","let","fn","return","if","else","while","break","continue","import","as"].includes(id))
+        // UPDATED: Added try, catch, throw
+        if (["true","false","null","in","for","let","fn","return","if","else","while","break","continue","import","as","try","catch","throw"].includes(id))
           out.push({ t: "keyword", v: id });
         else out.push({ t: "id", v: id });
         continue;
@@ -103,6 +103,10 @@ class Parser {
     if (this.peek().t === "keyword" && this.peek().v === "for") return this.parseFor();
     if (this.peek().t === "keyword" && this.peek().v === "import") return this.parseImport();
     if (this.peek().t === "keyword" && this.peek().v === "fn") return this.parseFn();
+    // UPDATED: Handle try/throw
+    if (this.peek().t === "keyword" && this.peek().v === "try") return this.parseTry();
+    if (this.peek().t === "keyword" && this.peek().v === "throw") return this.parseThrow();
+    
     if (this.peek().t === "keyword" && this.peek().v === "break") { this.next(); if (this.matchSymbol(";")){} return { kind: "break" }; }
     if (this.peek().t === "keyword" && this.peek().v === "continue") { this.next(); if (this.matchSymbol(";")){} return { kind: "continue" }; }
 
@@ -117,12 +121,42 @@ class Parser {
     return { kind: "expr", expr: e };
   }
 
+  // UPDATED: New parseTry method
+  parseTry() {
+    this.next(); // consume try
+    if (!this.matchSymbol("{")) throw new Error("try missing {");
+    const tryBody = [];
+    while (!this.matchSymbol("}")) tryBody.push(this.parseStmt());
+
+    if (!this.matchKeyword("catch")) throw new Error("expected catch after try");
+    
+    let errVar = null;
+    if (this.matchSymbol("(")) {
+      if (this.peek().t !== "id") throw new Error("catch expects identifier");
+      errVar = this.next().v;
+      if (!this.matchSymbol(")")) throw new Error("catch missing )");
+    }
+
+    if (!this.matchSymbol("{")) throw new Error("catch missing {");
+    const catchBody = [];
+    while (!this.matchSymbol("}")) catchBody.push(this.parseStmt());
+
+    return { kind: "try", tryBody, errVar, catchBody };
+  }
+
+  // UPDATED: New parseThrow method
+  parseThrow() {
+    this.next(); // consume throw
+    const expr = this.parseExpr();
+    if (this.matchSymbol(";")) {}
+    return { kind: "throw", expr };
+  }
+
   parseImport() {
-    this.next(); // consume 'import'
+    this.next(); 
     const tk = this.peek();
     if (tk.t !== "string") throw new Error("import expects a string literal");
     const file = this.next().v;
-    // Optional alias: import "file.vx" as name;
     let alias = null;
     if (this.peek().t === "keyword" && this.peek().v === "as") {
       this.next();
@@ -134,7 +168,7 @@ class Parser {
   }
 
   parseFn() {
-    this.next(); // consume 'fn'
+    this.next(); 
     if (this.peek().t !== "id") throw new Error("fn expects a name");
     const name = this.next().v;
 
@@ -336,7 +370,9 @@ const Op = {
   AND: "AND", OR: "OR", NOT: "NOT",
   NEWARRAY: "NEWARRAY", NEWOBJ: "NEWOBJ", INDEX: "INDEX", SETINDEX: "SETINDEX",
   GETPROP: "GETPROP", SETPROP: "SETPROP",
-  IMPORT: "IMPORT"
+  IMPORT: "IMPORT",
+  // UPDATED: New Opcodes for exceptions
+  TRY_PUSH: "TRY_PUSH", TRY_POP: "TRY_POP", THROW: "THROW"
 };
 
 /* ---------------- Compiler ---------------- */
@@ -483,6 +519,47 @@ class Compiler {
         info.continues.push(this.code.length - 1);
         break;
       }
+      // UPDATED: Compile try/catch
+      case "try": {
+        // We need to jump to catch block if error occurs.
+        // We'll emit TRY_PUSH (arg=catchAddr).
+        // Since we don't know catchAddr yet, we keep a reference.
+        
+        const tryPushIdx = this.code.length;
+        this.emit({ op: Op.TRY_PUSH, arg: null }); // Placeholder
+        
+        // Compile try block
+        for (const st of s.tryBody) this.emitStmt(st);
+        
+        // If we get here, try finished successfully.
+        this.emit({ op: Op.TRY_POP }); // Pop the handler
+        const skipCatchIdx = this.code.length;
+        this.emit({ op: Op.JMP, arg: null }); // Jump over catch block
+        
+        // Catch Block Starts Here
+        const catchStart = this.code.length;
+        this.code[tryPushIdx].arg = catchStart; // Patch TRY_PUSH
+        
+        // When VM jumps here, the Exception Object is pushed onto stack.
+        // We must store it in the error variable if one was defined.
+        if (s.errVar) {
+          this.emit({ op: Op.STORE, arg: this.addConst(s.errVar) });
+        } else {
+          this.emit({ op: Op.POP }); // Discard error if no variable provided
+        }
+        
+        for (const st of s.catchBody) this.emitStmt(st);
+        
+        // End of catch block
+        const afterCatch = this.code.length;
+        this.code[skipCatchIdx].arg = afterCatch; // Patch skip jump
+        break;
+      }
+      case "throw": {
+        this.emitExpr(s.expr);
+        this.emit({ op: Op.THROW });
+        break;
+      }
       default:
         throw new Error("Unsupported stmt kind: " + s.kind);
     }
@@ -578,12 +655,13 @@ class VM {
     this.consts = Array.from(consts);
     this.code = Array.from(code);
 
-    // frames: each frame = { code, consts, ip, locals: Map(), baseDir, isGlobal }
+    // frames: each frame = { code, consts, ip, locals: Map(), baseDir, isGlobal, tryStack: [] }
+    // tryStack items: { catchIp, stackHeight }
     this.frames = [];
     this.stack = [];
     this.globals = new Map();
     this.importedFiles = new Set();
-    this.importCache = new Map(); // absolutePath -> moduleObject or Promise
+    this.importCache = new Map(); 
     this.baseDir = options.baseDir || process.cwd();
     this.debug = !!options.debug;
 
@@ -591,30 +669,21 @@ class VM {
   }
 
   setupBuiltins() {
-    // Basic printing
     this.globals.set("print", { builtin: true, call: (args) => { console.log(...args.map(a => (a === null ? "null" : a))); return null; } });
-
-    // len
     this.globals.set("len", { builtin: true, call: (args) => {
       const v = args[0];
       if (Array.isArray(v) || typeof v === "string") return v.length;
       if (v && typeof v === "object") return Object.keys(v).length;
       return 0;
     }});
-
-    // range
     this.globals.set("range", { builtin: true, call: (args) => {
       let start = 0, end = 0;
       if (args.length === 1) { end = args[0]; }
       else if (args.length >= 2) { start = args[0]; end = args[1]; }
       const out = []; for (let i = start; i < end; i++) out.push(i); return out;
     }});
-
-    // push/pop helpers
     this.globals.set("push", { builtin: true, call: (args) => { const a = args[0]; a.push(args[1]); return a.length; }});
     this.globals.set("pop", { builtin: true, call: (args) => { const a = args[0]; return a.pop(); }});
-
-    // input (sync)
     this.globals.set("input", { builtin: true, call: (args) => {
       const prompt = args.length ? String(args[0]) : "";
       if (readlineSync) return readlineSync.question(prompt);
@@ -633,60 +702,45 @@ class VM {
         throw new Error("input() not available: " + e.message);
       }
     }});
-
-    // ---------------- FILE SYSTEM ----------------
     this.globals.set("read", { builtin: true, call: (args) => {
       const p = String(args[0]);
       return fs.readFileSync(path.resolve(this.baseDir, p), "utf8");
     }});
-
     this.globals.set("write", { builtin: true, call: (args) => {
       const p = String(args[0]); const data = args[1] ?? "";
       fs.writeFileSync(path.resolve(this.baseDir, p), String(data), "utf8");
       return null;
     }});
-
     this.globals.set("append", { builtin: true, call: (args) => {
       const p = String(args[0]); const data = args[1] ?? "";
       fs.appendFileSync(path.resolve(this.baseDir, p), String(data), "utf8");
       return null;
     }});
-
     this.globals.set("exists", { builtin: true, call: (args) => {
       const p = String(args[0]);
       return fs.existsSync(path.resolve(this.baseDir, p));
     }});
-
     this.globals.set("delete", { builtin: true, call: (args) => {
       const p = String(args[0]);
       const full = path.resolve(this.baseDir, p);
       if (fs.existsSync(full)) fs.unlinkSync(full);
       return null;
     }});
-
     this.globals.set("list", { builtin: true, call: (args) => {
       const p = args.length ? String(args[0]) : ".";
       return fs.readdirSync(path.resolve(this.baseDir, p));
     }});
-
     this.globals.set("mkdir", { builtin: true, call: (args) => {
       const p = String(args[0]);
       const full = path.resolve(this.baseDir, p);
       if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
       return null;
     }});
-
     this.globals.set("cwd", { builtin: true, call: () => process.cwd() });
-
-    // ---------------- JSON ----------------
     this.globals.set("json_encode", { builtin: true, call: (args) => JSON.stringify(args[0], null, 2) });
     this.globals.set("json_decode", { builtin: true, call: (args) => JSON.parse(String(args[0])) });
-
-    // ---------------- TIME / RANDOM ----------------
     this.globals.set("time", { builtin: true, call: () => Date.now() });
     this.globals.set("random", { builtin: true, call: () => Math.random() });
-
-    // ---------------- toString ----------------
     this.globals.set("toString", { builtin: true, call: (args) => {
       const obj = args[0];
       if (obj === null) return "null";
@@ -694,43 +748,33 @@ class VM {
       if (typeof obj === "object") return JSON.stringify(obj, null, 2);
       return String(obj);
     }});
-
-    // ---------------- PROCESS EXECUTION ----------------
     this.globals.set("exec", { builtin: true, call: (args) => {
       const cmd = String(args[0]);
       try {
         const out = child_process.execSync(cmd, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
         return out.trim();
       } catch (e) {
-        return String(e);
+        // UPDATED: Allow exec to throw so user can catch it
+        throw new Error(e.message);
       }
     }});
-
-    // ---------------- SLEEP (sync) ----------------
     this.globals.set("sleep", { builtin: true, call: (args) => {
       const ms = Number(args[0] ?? 0);
       const sab = new SharedArrayBuffer(4);
       const int32 = new Int32Array(sab);
-      try {
-        Atomics.wait(int32, 0, 0, ms);
-      } catch (e) {}
+      try { Atomics.wait(int32, 0, 0, ms); } catch (e) {}
       return null;
     }});
-
-    // ---------------- HTTP CLIENT (async) ----------------
     this.globals.set("http_get", { builtin: true, call: async (args) => {
-      if (!fetchImpl) throw new Error("fetch not available (install node-fetch for older Node)");
+      if (!fetchImpl) throw new Error("fetch not available");
       const url = String(args[0]);
       const res = await fetchImpl(url);
       const ct = res.headers && (res.headers.get ? res.headers.get("content-type") : res.headers["content-type"]);
-      if (ct && ct.includes("application/json")) {
-        return await res.json();
-      }
+      if (ct && ct.includes("application/json")) { return await res.json(); }
       return await res.text();
     }});
-
     this.globals.set("http_post", { builtin: true, call: async (args) => {
-      if (!fetchImpl) throw new Error("fetch not available (install node-fetch for older Node)");
+      if (!fetchImpl) throw new Error("fetch not available");
       const url = String(args[0]);
       const payload = args[1];
       const res = await fetchImpl(url, { method: "POST", body: typeof payload === "string" ? payload : JSON.stringify(payload), headers: { "Content-Type": "application/json" } });
@@ -738,10 +782,6 @@ class VM {
       if (ct && ct.includes("application/json")) return await res.json();
       return await res.text();
     }});
-
-    // ---------------- Additional helpers (math, string, number, io, process) ----------------
-
-    // Math namespace object (plain object) and callable math.* entries
     this.globals.set("math", { builtin: false, value: {
       sin: (v) => Math.sin(Number(v)),
       cos: (v) => Math.cos(Number(v)),
@@ -749,19 +789,14 @@ class VM {
       abs: (v) => Math.abs(Number(v)),
       pow: (a, b) => Math.pow(Number(a), Number(b ?? 0))
     }});
-
     this.globals.set("math.sin", { builtin: true, call: (args) => Math.sin(Number(args[0])) });
     this.globals.set("math.cos", { builtin: true, call: (args) => Math.cos(Number(args[0])) });
     this.globals.set("math.sqrt", { builtin: true, call: (args) => Math.sqrt(Number(args[0])) });
     this.globals.set("math.abs", { builtin: true, call: (args) => Math.abs(Number(args[0])) });
     this.globals.set("math.pow", { builtin: true, call: (args) => Math.pow(Number(args[0]), Number(args[1] ?? 0)) });
-
-    // Rounding helpers
     this.globals.set("round", { builtin: true, call: (args) => Math.round(Number(args[0])) });
     this.globals.set("floor", { builtin: true, call: (args) => Math.floor(Number(args[0])) });
     this.globals.set("ceil", { builtin: true, call: (args) => Math.ceil(Number(args[0])) });
-
-    // String helpers
     this.globals.set("split", { builtin: true, call: (args) => String(args[0]).split(String(args[1] ?? "")) });
     this.globals.set("indexOf", { builtin: true, call: (args) => String(args[0]).indexOf(String(args[1] ?? "")) });
     this.globals.set("substring", { builtin: true, call: (args) => String(args[0]).substring(Number(args[1] ?? 0), args.length > 2 ? Number(args[2]) : undefined) });
@@ -771,37 +806,25 @@ class VM {
     this.globals.set("startsWith", { builtin: true, call: (args) => String(args[0]).startsWith(String(args[1] ?? "")) });
     this.globals.set("endsWith", { builtin: true, call: (args) => String(args[0]).endsWith(String(args[1] ?? "")) });
     this.globals.set("replace", { builtin: true, call: (args) => String(args[0]).replace(String(args[1] ?? ""), String(args[2] ?? "")) });
-
-    // Number helpers
     this.globals.set("number", { builtin: true, call: (args) => Number(args[0]) });
     this.globals.set("parseInt", { builtin: true, call: (args) => parseInt(String(args[0]), args.length > 1 ? Number(args[1]) : 10) });
     this.globals.set("parseFloat", { builtin: true, call: (args) => parseFloat(String(args[0])) });
     this.globals.set("isNaN", { builtin: true, call: (args) => Number.isNaN(Number(args[0])) });
-
-    // IO helpers
     this.globals.set("read_json", { builtin: true, call: (args) => JSON.parse(fs.readFileSync(path.resolve(this.baseDir, String(args[0])), "utf8")) });
     this.globals.set("write_json", { builtin: true, call: (args) => { fs.writeFileSync(path.resolve(this.baseDir, String(args[0])), JSON.stringify(args[1], null, 2), "utf8"); return null; }});
     this.globals.set("join_path", { builtin: true, call: (args) => path.join(...args.map(a => String(a))) });
-
-    // Process helpers
     this.globals.set("env", { builtin: true, call: (args) => {
       if (args.length === 0) return process.env;
       return process.env[String(args[0])] ?? null;
     }});
     this.globals.set("set_env", { builtin: true, call: (args) => { process.env[String(args[0])] = String(args[1]); return null; }});
     this.globals.set("argv", { builtin: true, call: () => process.argv.slice(2) });
-
-    // Global setters/getters
     this.globals.set("global_set", { builtin: true, call: (args) => { this.globals.set(String(args[0]), args[1]); return null; }});
     this.globals.set("global_get", { builtin: true, call: (args) => this.globals.get(String(args[0])) ?? null });
-
-    // json alias
     this.globals.set("json", { builtin: true, call: (args) => JSON.stringify(args[0], null, 2) });
   }
 
-  // Helper to resolve a name in current frame or globals
   lookup(name) {
-    // search frames from top to bottom for locals
     for (let i = this.frames.length - 1; i >= 0; i--) {
       const f = this.frames[i];
       if (f.locals && Object.prototype.hasOwnProperty.call(f.locals, name)) return f.locals[name];
@@ -810,161 +833,144 @@ class VM {
     return undefined;
   }
 
-  // Helper to set a variable in the nearest frame or globals
-  setVar(name, value) {
-    for (let i = this.frames.length - 1; i >= 0; i--) {
-      const f = this.frames[i];
-      if (f.locals && Object.prototype.hasOwnProperty.call(f.locals, name)) { f.locals[name] = value; return; }
-    }
-    // otherwise set global
-    this.globals.set(name, value);
-  }
-
-  // Run the VM (async to support async builtins)
-  async run() {
-    // push global frame
-    this.frames.push({ code: this.code, consts: this.consts, ip: 0, locals: {}, baseDir: this.baseDir, isGlobal: true });
-
+  // UPDATED: Handle throwing exceptions by unwinding stack
+  handleException(err) {
+    const errorMsg = (err instanceof Error) ? err.message : String(err);
+    
+    // Unwind frames looking for a tryStack with entries
     while (this.frames.length > 0) {
       const frame = this.frames[this.frames.length - 1];
-      const code = frame.code;
-      while (frame.ip < code.length) {
-        const inst = code[frame.ip++];
-        if (!inst || !inst.op) continue;
-        switch (inst.op) {
-          case Op.CONST: {
-            const v = frame.consts[inst.arg];
-            this.stack.push(v);
-            break;
-          }
-          case Op.LOAD: {
-            const name = frame.consts[inst.arg];
-            // If name is a string constant representing an identifier, try lookup
-            if (typeof name === "string") {
-              // support dotted math namespace lookup: e.g., math.sin
-              if (name.includes(".") && this.globals.has(name)) {
-                this.stack.push(this.globals.get(name));
-              } else {
-                const val = this.lookup(name);
-                if (val === undefined) this.stack.push(null);
-                else this.stack.push(val);
-              }
-            } else {
-              // numeric or other constant
-              this.stack.push(name);
-            }
-            break;
-          }
-          case Op.STORE: {
-            const name = frame.consts[inst.arg];
-            const val = this.stack.pop();
-            // store in nearest frame or global
-            if (frame.isGlobal) {
-              this.globals.set(name, val);
-            } else {
-              frame.locals[name] = val;
-            }
-            break;
-          }
-          case Op.POP: {
-            this.stack.pop();
-            break;
-          }
-          case Op.ADD: {
-            const b = this.stack.pop(); const a = this.stack.pop();
-            if (typeof a === "string" || typeof b === "string") this.stack.push(String(a) + String(b));
-            else this.stack.push(a + b);
-            break;
-          }
-          case Op.SUB: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a - b); break; }
-          case Op.MUL: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a * b); break; }
-          case Op.DIV: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a / b); break; }
-          case Op.MOD: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a % b); break; }
-          case Op.EQ: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a === b); break; }
-          case Op.NEQ: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a !== b); break; }
-          case Op.LT: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a < b); break; }
-          case Op.LTE: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a <= b); break; }
-          case Op.GT: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a > b); break; }
-          case Op.GTE: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a >= b); break; }
-          case Op.NOT: { const a = this.stack.pop(); this.stack.push(!a); break; }
+      
+      if (frame.tryStack && frame.tryStack.length > 0) {
+        // Found a catch block!
+        const handler = frame.tryStack.pop();
+        
+        // Restore stack height to what it was before try block (plus whatever overhead)
+        // Actually, we should reset stack to handler.stackHeight
+        while (this.stack.length > handler.stackHeight) this.stack.pop();
+        
+        // Push error message
+        this.stack.push(errorMsg);
+        
+        // Jump to catch block
+        frame.ip = handler.catchIp;
+        return; // Recovered!
+      }
+      
+      // No catch in this frame, pop it and continue search
+      this.frames.pop();
+    }
+    
+    // If we get here, unhandled exception
+    console.error("❌ Uncaught Vexon Error:", errorMsg);
+    process.exit(1);
+  }
 
-          case Op.NEWARRAY: {
-            const n = inst.arg;
-            const arr = [];
-            for (let i = 0; i < n; i++) arr.unshift(this.stack.pop());
-            this.stack.push(arr);
-            break;
-          }
-          case Op.NEWOBJ: {
-            const n = inst.arg;
-            const obj = {};
-            for (let i = 0; i < n; i++) {
+  async run() {
+    // tryStack initialized in frames
+    this.frames.push({ code: this.code, consts: this.consts, ip: 0, locals: {}, baseDir: this.baseDir, isGlobal: true, tryStack: [] });
+
+    while (this.frames.length > 0) {
+      // UPDATED: Wrap execution in try/catch to handle JS errors in builtins
+      try {
+        const frame = this.frames[this.frames.length - 1];
+        const code = frame.code;
+        while (frame.ip < code.length) {
+          const inst = code[frame.ip++];
+          if (!inst || !inst.op) continue;
+          switch (inst.op) {
+            case Op.CONST: {
+              const v = frame.consts[inst.arg];
+              this.stack.push(v);
+              break;
+            }
+            case Op.LOAD: {
+              const name = frame.consts[inst.arg];
+              if (typeof name === "string") {
+                if (name.includes(".") && this.globals.has(name)) {
+                  this.stack.push(this.globals.get(name));
+                } else {
+                  const val = this.lookup(name);
+                  if (val === undefined) this.stack.push(null);
+                  else this.stack.push(val);
+                }
+              } else {
+                this.stack.push(name);
+              }
+              break;
+            }
+            case Op.STORE: {
+              const name = frame.consts[inst.arg];
               const val = this.stack.pop();
-              const key = this.stack.pop();
-              obj[key] = val;
-            }
-            this.stack.push(obj);
-            break;
-          }
-          case Op.INDEX: {
-            const idx = this.stack.pop();
-            const target = this.stack.pop();
-            if (Array.isArray(target)) this.stack.push(target[idx]);
-            else if (target && typeof target === "object") this.stack.push(target[idx]);
-            else this.stack.push(null);
-            break;
-          }
-          case Op.SETINDEX: {
-            const val = this.stack.pop();
-            const idx = this.stack.pop();
-            const target = this.stack.pop();
-            if (Array.isArray(target)) target[idx] = val;
-            else if (target && typeof target === "object") target[idx] = val;
-            this.stack.push(val);
-            break;
-          }
-          case Op.CALL: {
-            const argc = inst.arg;
-            const args = [];
-            for (let i = 0; i < argc; i++) args.unshift(this.stack.pop());
-            const callee = this.stack.pop();
-
-            // builtin object with .call
-            if (callee && callee.builtin && typeof callee.call === "function") {
-              const res = callee.call(args);
-              if (res && typeof res.then === "function") {
-                const awaited = await res;
-                this.stack.push(awaited);
+              if (frame.isGlobal) {
+                this.globals.set(name, val);
               } else {
-                this.stack.push(res);
+                frame.locals[name] = val;
               }
               break;
             }
-
-            // If callee is a plain object with value property (like math namespace), not callable
-            if (callee && typeof callee === "object" && !callee.builtin && callee.value) {
-              // not callable
-              this.stack.push(null);
+            case Op.POP: { this.stack.pop(); break; }
+            case Op.ADD: {
+              const b = this.stack.pop(); const a = this.stack.pop();
+              if (typeof a === "string" || typeof b === "string") this.stack.push(String(a) + String(b));
+              else this.stack.push(a + b);
               break;
             }
+            case Op.SUB: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a - b); break; }
+            case Op.MUL: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a * b); break; }
+            case Op.DIV: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a / b); break; }
+            case Op.MOD: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a % b); break; }
+            case Op.EQ: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a === b); break; }
+            case Op.NEQ: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a !== b); break; }
+            case Op.LT: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a < b); break; }
+            case Op.LTE: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a <= b); break; }
+            case Op.GT: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a > b); break; }
+            case Op.GTE: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a >= b); break; }
+            case Op.NOT: { const a = this.stack.pop(); this.stack.push(!a); break; }
 
-            // user function object: { params, code, consts }
-            if (callee && typeof callee === "object" && callee.params && callee.code) {
-              const newFrame = { code: callee.code, consts: callee.consts, ip: 0, locals: {}, baseDir: frame.baseDir, isGlobal: false };
-              // bind params
-              for (let i = 0; i < callee.params.length; i++) {
-                newFrame.locals[callee.params[i]] = args[i];
+            case Op.NEWARRAY: {
+              const n = inst.arg;
+              const arr = [];
+              for (let i = 0; i < n; i++) arr.unshift(this.stack.pop());
+              this.stack.push(arr);
+              break;
+            }
+            case Op.NEWOBJ: {
+              const n = inst.arg;
+              const obj = {};
+              for (let i = 0; i < n; i++) {
+                const val = this.stack.pop();
+                const key = this.stack.pop();
+                obj[key] = val;
               }
-              this.frames.push(newFrame);
-              // call: break into executing new frame
+              this.stack.push(obj);
               break;
             }
+            case Op.INDEX: {
+              const idx = this.stack.pop();
+              const target = this.stack.pop();
+              if (Array.isArray(target)) this.stack.push(target[idx]);
+              else if (target && typeof target === "object") this.stack.push(target[idx]);
+              else this.stack.push(null);
+              break;
+            }
+            case Op.SETINDEX: {
+              const val = this.stack.pop();
+              const idx = this.stack.pop();
+              const target = this.stack.pop();
+              if (Array.isArray(target)) target[idx] = val;
+              else if (target && typeof target === "object") target[idx] = val;
+              this.stack.push(val);
+              break;
+            }
+            case Op.CALL: {
+              const argc = inst.arg;
+              const args = [];
+              for (let i = 0; i < argc; i++) args.unshift(this.stack.pop());
+              const callee = this.stack.pop();
 
-            // If callee is a string name referencing a builtin or function
-            if (typeof callee === "string") {
-              const val = this.lookup(callee);
-              if (val && val.builtin && typeof val.call === "function") {
-                const res = val.call(args);
+              if (callee && callee.builtin && typeof callee.call === "function") {
+                const res = callee.call(args);
                 if (res && typeof res.then === "function") {
                   const awaited = await res;
                   this.stack.push(awaited);
@@ -973,137 +979,163 @@ class VM {
                 }
                 break;
               }
-              if (val && typeof val === "object" && val.params && val.code) {
-                const newFrame = { code: val.code, consts: val.consts, ip: 0, locals: {}, baseDir: frame.baseDir, isGlobal: false };
-                for (let i = 0; i < val.params.length; i++) newFrame.locals[val.params[i]] = args[i];
+
+              if (callee && typeof callee === "object" && !callee.builtin && callee.value) {
+                this.stack.push(null);
+                break;
+              }
+
+              if (callee && typeof callee === "object" && callee.params && callee.code) {
+                const newFrame = { code: callee.code, consts: callee.consts, ip: 0, locals: {}, baseDir: frame.baseDir, isGlobal: false, tryStack: [] };
+                for (let i = 0; i < callee.params.length; i++) {
+                  newFrame.locals[callee.params[i]] = args[i];
+                }
                 this.frames.push(newFrame);
                 break;
               }
-            }
 
-            // If callee is a plain JS function (rare), call it
-            if (typeof callee === "function") {
-              const res = callee(...args);
-              if (res && typeof res.then === "function") {
-                const awaited = await res;
-                this.stack.push(awaited);
-              } else {
-                this.stack.push(res);
+              if (typeof callee === "string") {
+                const val = this.lookup(callee);
+                if (val && val.builtin && typeof val.call === "function") {
+                  const res = val.call(args);
+                  if (res && typeof res.then === "function") {
+                    const awaited = await res;
+                    this.stack.push(awaited);
+                  } else {
+                    this.stack.push(res);
+                  }
+                  break;
+                }
+                if (val && typeof val === "object" && val.params && val.code) {
+                  const newFrame = { code: val.code, consts: val.consts, ip: 0, locals: {}, baseDir: frame.baseDir, isGlobal: false, tryStack: [] };
+                  for (let i = 0; i < val.params.length; i++) newFrame.locals[val.params[i]] = args[i];
+                  this.frames.push(newFrame);
+                  break;
+                }
               }
-              break;
-            }
 
-            // unknown callee
-            this.stack.push(null);
-            break;
-          }
-
-          case Op.RET: {
-            // return value is on stack (optional)
-            const retVal = this.stack.length ? this.stack.pop() : null;
-            // pop current frame
-            this.frames.pop();
-            // push return value to previous frame's stack
-            if (this.frames.length === 0) {
-              // program returned from global frame -> end
-              return;
-            } else {
-              this.stack.push(retVal);
-              // continue executing caller frame
-              break;
-            }
-          }
-
-          case Op.JMP: {
-            frame.ip = inst.arg;
-            break;
-          }
-          case Op.JMPF: {
-            const cond = this.stack.pop();
-            if (!cond) frame.ip = inst.arg;
-            break;
-          }
-
-          case Op.IMPORT: {
-            // robust import implementation with caching and circular support
-            const importFileConst = frame.consts[inst.arg];
-            let importPath = String(importFileConst);
-
-            // Resolve relative to current frame baseDir
-            const currentBase = frame.baseDir || this.baseDir;
-            let resolvedPath = importPath;
-            if (!path.isAbsolute(importPath)) resolvedPath = path.resolve(currentBase, importPath);
-            if (!path.extname(resolvedPath)) resolvedPath += ".vx";
-            resolvedPath = path.normalize(resolvedPath);
-
-            // If cached, push cached module object or wait for promise
-            if (this.importCache.has(resolvedPath)) {
-              const cached = this.importCache.get(resolvedPath);
-              // support Promise stored during loading
-              if (cached && typeof cached.then === "function") {
-                const moduleObj = await cached;
-                this.stack.push(moduleObj);
+              if (typeof callee === "function") {
+                const res = callee(...args);
+                if (res && typeof res.then === "function") {
+                  const awaited = await res;
+                  this.stack.push(awaited);
+                } else {
+                  this.stack.push(res);
+                }
                 break;
+              }
+
+              this.stack.push(null);
+              break;
+            }
+
+            case Op.RET: {
+              const retVal = this.stack.length ? this.stack.pop() : null;
+              this.frames.pop();
+              if (this.frames.length === 0) {
+                return;
               } else {
-                this.stack.push(cached);
+                this.stack.push(retVal);
                 break;
               }
             }
 
-            if (!fs.existsSync(resolvedPath)) {
-              throw new Error("Import failed: file not found: " + resolvedPath);
+            case Op.JMP: { frame.ip = inst.arg; break; }
+            case Op.JMPF: {
+              const cond = this.stack.pop();
+              if (!cond) frame.ip = inst.arg;
+              break;
             }
 
-            // Create a promise placeholder and store it to handle circular imports
-            const loadPromise = (async () => {
-              const src = fs.readFileSync(resolvedPath, "utf8");
-              const lexer = new Lexer(src);
-              const tokens = lexer.lex();
-              const parser = new Parser(tokens);
-              const stmts = parser.parseProgram();
-              const compiler = new Compiler();
-              const compiled = compiler.compile(stmts);
+            // UPDATED: Exception opcodes
+            case Op.TRY_PUSH: {
+              const catchAddr = inst.arg;
+              if (!frame.tryStack) frame.tryStack = [];
+              frame.tryStack.push({ catchIp: catchAddr, stackHeight: this.stack.length });
+              break;
+            }
+            case Op.TRY_POP: {
+              if (frame.tryStack) frame.tryStack.pop();
+              break;
+            }
+            case Op.THROW: {
+              const err = this.stack.pop();
+              throw new Error(err); // Throw to JS, which catches in run() loop
+            }
 
-              // Create child VM and run it
-              const childVM = new VM(compiled.consts, compiled.code, { baseDir: path.dirname(resolvedPath), debug: this.debug });
+            case Op.IMPORT: {
+              const importFileConst = frame.consts[inst.arg];
+              let importPath = String(importFileConst);
 
-              // Pre-cache an empty module object to allow circular references during execution
-              const placeholder = {};
-              this.importCache.set(resolvedPath, placeholder);
+              const currentBase = frame.baseDir || this.baseDir;
+              let resolvedPath = importPath;
+              if (!path.isAbsolute(importPath)) resolvedPath = path.resolve(currentBase, importPath);
+              if (!path.extname(resolvedPath)) resolvedPath += ".vx";
+              resolvedPath = path.normalize(resolvedPath);
 
-              await childVM.run();
-
-              // Collect exported names from childVM.globals into a plain object
-              const moduleObj = {};
-              for (const [k, v] of childVM.globals.entries()) {
-                moduleObj[k] = v;
+              if (this.importCache.has(resolvedPath)) {
+                const cached = this.importCache.get(resolvedPath);
+                if (cached && typeof cached.then === "function") {
+                  const moduleObj = await cached;
+                  this.stack.push(moduleObj);
+                  break;
+                } else {
+                  this.stack.push(cached);
+                  break;
+                }
               }
 
-              // Replace placeholder with real module object
-              this.importCache.set(resolvedPath, moduleObj);
-              return moduleObj;
-            })();
+              if (!fs.existsSync(resolvedPath)) {
+                throw new Error("Import failed: file not found: " + resolvedPath);
+              }
 
-            // store promise while loading
-            this.importCache.set(resolvedPath, loadPromise);
-            const moduleObj = await loadPromise;
-            this.stack.push(moduleObj);
-            break;
-          }
+              const loadPromise = (async () => {
+                const src = fs.readFileSync(resolvedPath, "utf8");
+                const lexer = new Lexer(src);
+                const tokens = lexer.lex();
+                const parser = new Parser(tokens);
+                const stmts = parser.parseProgram();
+                const compiler = new Compiler();
+                const compiled = compiler.compile(stmts);
 
-          case Op.HALT: {
-            // end of this frame/program
-            this.frames.pop();
-            if (this.frames.length === 0) return;
-            break;
-          }
+                const childVM = new VM(compiled.consts, compiled.code, { baseDir: path.dirname(resolvedPath), debug: this.debug });
 
-          default:
-            throw new Error("Unknown opcode: " + inst.op);
-        } // end switch
-      } // end while frame.ip < code.length
-    } // end while frames
-  } // end run
-} // end VM
+                const placeholder = {};
+                this.importCache.set(resolvedPath, placeholder);
+
+                await childVM.run();
+
+                const moduleObj = {};
+                for (const [k, v] of childVM.globals.entries()) {
+                  moduleObj[k] = v;
+                }
+
+                this.importCache.set(resolvedPath, moduleObj);
+                return moduleObj;
+              })();
+
+              this.importCache.set(resolvedPath, loadPromise);
+              const moduleObj = await loadPromise;
+              this.stack.push(moduleObj);
+              break;
+            }
+
+            case Op.HALT: {
+              this.frames.pop();
+              if (this.frames.length === 0) return;
+              break;
+            }
+
+            default:
+              throw new Error("Unknown opcode: " + inst.op);
+          } 
+        } 
+      } catch (err) {
+        // UPDATED: Catch both JS errors and THROW opcode errors
+        this.handleException(err);
+      }
+    } 
+  } 
+} 
 
 module.exports = { Lexer, Parser, Compiler, VM };
