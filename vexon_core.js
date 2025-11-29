@@ -3,10 +3,10 @@
   vexon_core.js — Updated with Exception Handling (try/catch)
 
   Updates:
-  - Lexer: Added 'try', 'catch', 'throw' keywords
-  - Parser: Added parseTry() and parseThrow()
+  - Lexer: Added 'try', 'catch', 'throw' keywords (+ func/function)
+  - Parser: Added parseTry() and parseThrow(), improved object key handling
   - Compiler: Added TRY_PUSH, TRY_POP opcodes
-  - VM: Implemented error unwinding and catch blocks
+  - VM: Implemented error unwinding and catch blocks + SETPROP opcode
 */
 
 const fs = require("fs");
@@ -70,8 +70,8 @@ class Lexer {
       if (isAlpha(c)) {
         let id = "";
         while (!this.eof() && /[A-Za-z0-9_]/.test(this.peek())) id += this.next();
-        // UPDATED: Added try, catch, throw
-        if (["true","false","null","in","for","let","fn","return","if","else","while","break","continue","import","as","try","catch","throw"].includes(id))
+        // UPDATED: Added try, catch, throw and func/function synonyms
+        if (["true","false","null","in","for","let","fn","func","function","return","if","else","while","break","continue","import","as","try","catch","throw"].includes(id))
           out.push({ t: "keyword", v: id });
         else out.push({ t: "id", v: id });
         continue;
@@ -102,7 +102,8 @@ class Parser {
     if (this.peek().t === "keyword" && this.peek().v === "while") return this.parseWhile();
     if (this.peek().t === "keyword" && this.peek().v === "for") return this.parseFor();
     if (this.peek().t === "keyword" && this.peek().v === "import") return this.parseImport();
-    if (this.peek().t === "keyword" && this.peek().v === "fn") return this.parseFn();
+    // Accept fn, func, or function
+    if (this.peek().t === "keyword" && (this.peek().v === "fn" || this.peek().v === "func" || this.peek().v === "function")) return this.parseFn();
     // UPDATED: Handle try/throw
     if (this.peek().t === "keyword" && this.peek().v === "try") return this.parseTry();
     if (this.peek().t === "keyword" && this.peek().v === "throw") return this.parseThrow();
@@ -302,9 +303,20 @@ class Parser {
         while (true) {
           const keytk = this.peek();
           let key;
-          if (keytk.t === "id") key = this.next().v;
-          else if (keytk.t === "string") key = this.next().v;
-          else throw new Error("object key must be identifier or string");
+          // Accept id, string, number, or true/false/null as keys
+          if (keytk.t === "id") {
+            key = this.next().v;
+          } else if (keytk.t === "string") {
+            key = this.next().v;
+          } else if (keytk.t === "number") {
+            // numeric keys allowed — treat as string key
+            key = this.next().v;
+          } else if (keytk.t === "keyword" && (keytk.v === "true" || keytk.v === "false" || keytk.v === "null")) {
+            key = this.next().v;
+          } else {
+            throw new Error("object key must be identifier, string, or number — got " + keytk.t + (keytk.v ? (":" + keytk.v) : ""));
+          }
+
           if (!this.matchSymbol(":")) throw new Error("object entry missing :");
           const val = this.parseExpr();
           entries.push({ key, value: val });
@@ -960,6 +972,15 @@ class VM {
               const target = this.stack.pop();
               if (Array.isArray(target)) target[idx] = val;
               else if (target && typeof target === "object") target[idx] = val;
+              this.stack.push(val);
+              break;
+            }
+            // NEW: implement SETPROP (target, key, value) -> sets property and pushes value
+            case Op.SETPROP: {
+              const val = this.stack.pop();
+              const key = this.stack.pop();
+              const target = this.stack.pop();
+              if (target && typeof target === "object") target[key] = val;
               this.stack.push(val);
               break;
             }
