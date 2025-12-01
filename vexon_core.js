@@ -1,12 +1,12 @@
 "use strict";
 /*
-  vexon_core.js — Updated with Exception Handling (try/catch) and working IMPORT
+  vexon_core.js — Updated with Exception Handling (try/catch)
 
-  Changes:
-  - Implemented Op.IMPORT handler in VM to read, compile, run imported .vx files and return a module object.
-  - Implemented TRY_PUSH, TRY_POP, THROW semantics with stack unwinding across frames.
-  - Implemented CALL/RET, GET/SET index/prop, SETPROP, SETINDEX behavior.
-  - Completed builtins (toString, fetch fallback).
+  Updates:
+  - Lexer: Added 'try', 'catch', 'throw' keywords (+ func/function)
+  - Parser: Added parseTry() and parseThrow(), improved object key handling
+  - Compiler: Added TRY_PUSH, TRY_POP opcodes
+  - VM: Implemented error unwinding and catch blocks + SETPROP opcode
 */
 
 const fs = require("fs");
@@ -756,393 +756,407 @@ class VM {
     this.globals.set("toString", { builtin: true, call: (args) => {
       const obj = args[0];
       if (obj === null) return "null";
-      if (Array.isArray(obj)) return "[" + obj.map(item => (item === null ? "null" : (typeof item === "object" ? JSON.stringify(item) : String(item)))).join(", ") + "]";
+      if (Array.isArray(obj)) return "[" + obj.map(item => (item === null ? "null" : (typeof item === "object" ? JSON.stringify(item, null, 2) : String(item)))).join(", ") + "]";
       if (typeof obj === "object") return JSON.stringify(obj, null, 2);
       return String(obj);
     }});
-    this.globals.set("fetch", { builtin: true, call: (args) => {
-      if (!fetchImpl) throw new Error("fetch not available in this environment");
-      const url = String(args[0]);
-      const opts = args[1] || {};
-      // return a promise-like object? We'll return a simple wrapper that resolves to text synchronously is not possible.
-      // For simplicity, return a Promise so user code can handle it via then/callbacks if supported.
-      return fetchImpl(url, opts).then(res => res.text());
+    this.globals.set("exec", { builtin: true, call: (args) => {
+      const cmd = String(args[0]);
+      try {
+        const out = child_process.execSync(cmd, { encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] });
+        return out.trim();
+      } catch (e) {
+        // UPDATED: Allow exec to throw so user can catch it
+        throw new Error(e.message);
+      }
     }});
+    this.globals.set("sleep", { builtin: true, call: (args) => {
+      const ms = Number(args[0] ?? 0);
+      const sab = new SharedArrayBuffer(4);
+      const int32 = new Int32Array(sab);
+      try { Atomics.wait(int32, 0, 0, ms); } catch (e) {}
+      return null;
+    }});
+    this.globals.set("http_get", { builtin: true, call: async (args) => {
+      if (!fetchImpl) throw new Error("fetch not available");
+      const url = String(args[0]);
+      const res = await fetchImpl(url);
+      const ct = res.headers && (res.headers.get ? res.headers.get("content-type") : res.headers["content-type"]);
+      if (ct && ct.includes("application/json")) { return await res.json(); }
+      return await res.text();
+    }});
+    this.globals.set("http_post", { builtin: true, call: async (args) => {
+      if (!fetchImpl) throw new Error("fetch not available");
+      const url = String(args[0]);
+      const payload = args[1];
+      const res = await fetchImpl(url, { method: "POST", body: typeof payload === "string" ? payload : JSON.stringify(payload), headers: { "Content-Type": "application/json" } });
+      const ct = res.headers && (res.headers.get ? res.headers.get("content-type") : res.headers["content-type"]);
+      if (ct && ct.includes("application/json")) return await res.json();
+      return await res.text();
+    }});
+    this.globals.set("math", { builtin: false, value: {
+      sin: (v) => Math.sin(Number(v)),
+      cos: (v) => Math.cos(Number(v)),
+      sqrt: (v) => Math.sqrt(Number(v)),
+      abs: (v) => Math.abs(Number(v)),
+      pow: (a, b) => Math.pow(Number(a), Number(b ?? 0))
+    }});
+    this.globals.set("math.sin", { builtin: true, call: (args) => Math.sin(Number(args[0])) });
+    this.globals.set("math.cos", { builtin: true, call: (args) => Math.cos(Number(args[0])) });
+    this.globals.set("math.sqrt", { builtin: true, call: (args) => Math.sqrt(Number(args[0])) });
+    this.globals.set("math.abs", { builtin: true, call: (args) => Math.abs(Number(args[0])) });
+    this.globals.set("math.pow", { builtin: true, call: (args) => Math.pow(Number(args[0]), Number(args[1] ?? 0)) });
+    this.globals.set("round", { builtin: true, call: (args) => Math.round(Number(args[0])) });
+    this.globals.set("floor", { builtin: true, call: (args) => Math.floor(Number(args[0])) });
+    this.globals.set("ceil", { builtin: true, call: (args) => Math.ceil(Number(args[0])) });
+    this.globals.set("split", { builtin: true, call: (args) => String(args[0]).split(String(args[1] ?? "")) });
+    this.globals.set("indexOf", { builtin: true, call: (args) => String(args[0]).indexOf(String(args[1] ?? "")) });
+    this.globals.set("substring", { builtin: true, call: (args) => String(args[0]).substring(Number(args[1] ?? 0), args.length > 2 ? Number(args[2]) : undefined) });
+    this.globals.set("trim", { builtin: true, call: (args) => String(args[0]).trim() });
+    this.globals.set("toLower", { builtin: true, call: (args) => String(args[0]).toLowerCase() });
+    this.globals.set("toUpper", { builtin: true, call: (args) => String(args[0]).toUpperCase() });
+    this.globals.set("startsWith", { builtin: true, call: (args) => String(args[0]).startsWith(String(args[1] ?? "")) });
+    this.globals.set("endsWith", { builtin: true, call: (args) => String(args[0]).endsWith(String(args[1] ?? "")) });
+    this.globals.set("replace", { builtin: true, call: (args) => String(args[0]).replace(String(args[1] ?? ""), String(args[2] ?? "")) });
+    this.globals.set("number", { builtin: true, call: (args) => Number(args[0]) });
+    this.globals.set("parseInt", { builtin: true, call: (args) => parseInt(String(args[0]), args.length > 1 ? Number(args[1]) : 10) });
+    this.globals.set("parseFloat", { builtin: true, call: (args) => parseFloat(String(args[0])) });
+    this.globals.set("isNaN", { builtin: true, call: (args) => Number.isNaN(Number(args[0])) });
+    this.globals.set("read_json", { builtin: true, call: (args) => JSON.parse(fs.readFileSync(path.resolve(this.baseDir, String(args[0])), "utf8")) });
+    this.globals.set("write_json", { builtin: true, call: (args) => { fs.writeFileSync(path.resolve(this.baseDir, String(args[0])), JSON.stringify(args[1], null, 2), "utf8"); return null; }});
+    this.globals.set("join_path", { builtin: true, call: (args) => path.join(...args.map(a => String(a))) });
+    this.globals.set("env", { builtin: true, call: (args) => {
+      if (args.length === 0) return process.env;
+      return process.env[String(args[0])] ?? null;
+    }});
+    this.globals.set("set_env", { builtin: true, call: (args) => { process.env[String(args[0])] = String(args[1]); return null; }});
+    this.globals.set("argv", { builtin: true, call: () => process.argv.slice(2) });
+    this.globals.set("global_set", { builtin: true, call: (args) => { this.globals.set(String(args[0]), args[1]); return null; }});
+    this.globals.set("global_get", { builtin: true, call: (args) => this.globals.get(String(args[0])) ?? null });
+    this.globals.set("json", { builtin: true, call: (args) => JSON.stringify(args[0], null, 2) });
   }
 
-  // Helper to push a value onto stack
-  push(v) { this.stack.push(v); }
-  pop() { return this.stack.pop(); }
-
-  // Resolve a name: check locals of current frame, then globals
-  resolveName(frame, name) {
-    if (frame && frame.locals && frame.locals.has(name)) return frame.locals.get(name);
+  lookup(name) {
+    for (let i = this.frames.length - 1; i >= 0; i--) {
+      const f = this.frames[i];
+      if (f.locals && Object.prototype.hasOwnProperty.call(f.locals, name)) return f.locals[name];
+    }
     if (this.globals.has(name)) return this.globals.get(name);
     return undefined;
   }
 
-  // Set a global/local variable
-  setName(frame, name, value) {
-    if (frame && frame.isGlobal === false && frame.locals && frame.locals.has(name)) {
-      frame.locals.set(name, value);
-      return;
-    }
-    // If current frame is function frame, set in locals
-    if (frame && frame.isGlobal === false && frame.locals) {
-      frame.locals.set(name, value);
-      return;
-    }
-    // Otherwise set global
-    this.globals.set(name, value);
-  }
-
-  // Run the VM (async because imports and fetch may be async)
-  async run() {
-    // push initial global frame
-    const globalFrame = {
-      code: this.code,
-      consts: this.consts,
-      ip: 0,
-      locals: new Map(),
-      baseDir: this.baseDir,
-      isGlobal: true,
-      tryStack: []
-    };
-    this.frames.push(globalFrame);
-
+  // UPDATED: Handle throwing exceptions by unwinding stack
+  handleException(err) {
+    const errorMsg = (err instanceof Error) ? err.message : String(err);
+    
+    // Unwind frames looking for a tryStack with entries
     while (this.frames.length > 0) {
       const frame = this.frames[this.frames.length - 1];
-      const code = frame.code;
-      if (frame.ip >= code.length) {
-        // No more instructions in this frame: pop it
-        this.frames.pop();
-        continue;
+      
+      if (frame.tryStack && frame.tryStack.length > 0) {
+        // Found a catch block!
+        const handler = frame.tryStack.pop();
+        
+        // Restore stack height to what it was before try block (plus whatever overhead)
+        // Actually, we should reset stack to handler.stackHeight
+        while (this.stack.length > handler.stackHeight) this.stack.pop();
+        
+        // Push error message
+        this.stack.push(errorMsg);
+        
+        // Jump to catch block
+        frame.ip = handler.catchIp;
+        return; // Recovered!
       }
-      const inst = code[frame.ip++];
-      if (this.debug) console.log("IP", frame.ip - 1, inst.op, inst.arg ?? "");
-      try {
-        switch (inst.op) {
-          case Op.CONST: {
-            const v = frame.consts[inst.arg];
-            this.push(v);
-            break;
-          }
-          case Op.LOAD: {
-            const name = frame.consts[inst.arg];
-            const val = this.resolveName(frame, name);
-            this.push(val);
-            break;
-          }
-          case Op.STORE: {
-            const name = frame.consts[inst.arg];
-            const val = this.pop();
-            // If storing into a function-local frame, store there; otherwise global
-            if (frame.isGlobal) this.globals.set(name, val);
-            else frame.locals.set(name, val);
-            break;
-          }
-          case Op.POP: {
-            this.pop();
-            break;
-          }
-          case Op.ADD: {
-            const b = this.pop(); const a = this.pop();
-            this.push(a + b);
-            break;
-          }
-          case Op.SUB: {
-            const b = this.pop(); const a = this.pop();
-            this.push(a - b);
-            break;
-          }
-          case Op.MUL: {
-            const b = this.pop(); const a = this.pop();
-            this.push(a * b);
-            break;
-          }
-          case Op.DIV: {
-            const b = this.pop(); const a = this.pop();
-            this.push(a / b);
-            break;
-          }
-          case Op.MOD: {
-            const b = this.pop(); const a = this.pop();
-            this.push(a % b);
-            break;
-          }
-          case Op.EQ: {
-            const b = this.pop(); const a = this.pop();
-            this.push(a === b);
-            break;
-          }
-          case Op.NEQ: {
-            const b = this.pop(); const a = this.pop();
-            this.push(a !== b);
-            break;
-          }
-          case Op.LT: {
-            const b = this.pop(); const a = this.pop();
-            this.push(a < b);
-            break;
-          }
-          case Op.LTE: {
-            const b = this.pop(); const a = this.pop();
-            this.push(a <= b);
-            break;
-          }
-          case Op.GT: {
-            const b = this.pop(); const a = this.pop();
-            this.push(a > b);
-            break;
-          }
-          case Op.GTE: {
-            const b = this.pop(); const a = this.pop();
-            this.push(a >= b);
-            break;
-          }
-          case Op.JMP: {
-            frame.ip = inst.arg;
-            break;
-          }
-          case Op.JMPF: {
-            const cond = this.pop();
-            if (!cond) frame.ip = inst.arg;
-            break;
-          }
-          case Op.NEWARRAY: {
-            const n = inst.arg;
-            const arr = [];
-            for (let i = 0; i < n; i++) {
-              arr.unshift(this.pop());
-            }
-            this.push(arr);
-            break;
-          }
-          case Op.NEWOBJ: {
-            const n = inst.arg;
-            const obj = {};
-            for (let i = 0; i < n; i++) {
-              const val = this.pop();
-              const key = this.pop();
-              obj[key] = val;
-            }
-            this.push(obj);
-            break;
-          }
-          case Op.INDEX: {
-            const idx = this.pop();
-            const target = this.pop();
-            try {
-              this.push(target[idx]);
-            } catch (e) {
-              this.push(undefined);
-            }
-            break;
-          }
-          case Op.SETINDEX: {
-            const val = this.pop();
-            const idx = this.pop();
-            const target = this.pop();
-            if (target && (Array.isArray(target) || typeof target === "object")) {
-              target[idx] = val;
-            }
-            this.push(val);
-            break;
-          }
-          case Op.SEPROP:
-          case Op.SETPROP: {
-            // Stack: ... targetObj, key, value
-            const val = this.pop();
-            const key = this.pop();
-            const target = this.pop();
-            if (target && typeof target === "object") {
-              target[key] = val;
-            }
-            this.push(val);
-            break;
-          }
-          case Op.IMPORT: {
-            // arg is a const string path
-            const fileConst = frame.consts[inst.arg];
-            // Resolve relative to current frame baseDir
-            const full = path.resolve(frame.baseDir || this.baseDir, fileConst);
-            if (this.importCache.has(full)) {
-              this.push(this.importCache.get(full));
-              break;
-            }
-            if (!fs.existsSync(full)) {
-              // Try adding .vx
-              if (fs.existsSync(full + ".vx")) {
-                full = full + ".vx";
-              } else {
-                throw new Error("Import file not found: " + full);
-              }
-            }
-            const src = fs.readFileSync(full, "utf8");
-            // Lex/parse/compile
-            const lexer = new Lexer(src);
-            const tokens = lexer.lex();
-            const parser = new Parser(tokens);
-            const stmts = parser.parseProgram();
-            const compiler = new Compiler();
-            const compiled = compiler.compile(stmts);
-            // Create child VM and run it
-            const childVM = new VM(compiled.consts, compiled.code, { baseDir: path.dirname(full), debug: this.debug });
-            // Share builtins by copying them into child's globals so builtins exist
-            for (const [k, v] of this.globals.entries()) {
-              if (v && v.builtin) childVM.globals.set(k, v);
-            }
-            await childVM.run();
-            // Build module object from child's globals (exclude builtins)
-            const moduleObj = {};
-            for (const [k, v] of childVM.globals.entries()) {
-              if (v && v.builtin) continue;
-              moduleObj[k] = v;
-            }
-            this.importCache.set(full, moduleObj);
-            this.push(moduleObj);
-            break;
-          }
-          case Op.CALL: {
-            const argc = inst.arg || 0;
-            const args = [];
-            for (let i = 0; i < argc; i++) args.unshift(this.pop());
-            const callee = this.pop();
-            if (callee === undefined) throw new Error("Call of undefined");
-            // Builtin
-            if (callee && callee.builtin && typeof callee.call === "function") {
-              const res = callee.call(args);
-              // If res is a Promise, await it
-              if (res && typeof res.then === "function") {
-                const awaited = await res;
-                this.push(awaited);
-              } else {
-                this.push(res);
-              }
-              break;
-            }
-            // User function object: { params, code, consts }
-            if (callee && callee.code && Array.isArray(callee.code)) {
-              const funcFrame = {
-                code: callee.code,
-                consts: callee.consts,
-                ip: 0,
-                locals: new Map(),
-                baseDir: frame.baseDir, // inherit baseDir
-                isGlobal: false,
-                tryStack: []
-              };
-              // bind params
-              for (let i = 0; i < (callee.params ? callee.params.length : 0); i++) {
-                const pname = callee.params[i];
-                funcFrame.locals.set(pname, args[i]);
-              }
-              // push frame
-              this.frames.push(funcFrame);
-              break;
-            }
-            // If callee is a plain JS function (unlikely), call it
-            if (typeof callee === "function") {
-              const res = callee(...args);
-              if (res && typeof res.then === "function") {
-                const awaited = await res;
-                this.push(awaited);
-              } else {
-                this.push(res);
-              }
-              break;
-            }
-            throw new Error("Unsupported call target");
-          }
-          case Op.RET: {
-            // Pop return value if present
-            const retVal = this.stack.length ? this.pop() : undefined;
-            // Pop current frame
-            this.frames.pop();
-            // If there is a caller frame, push return value
-            if (this.frames.length > 0) {
-              this.push(retVal);
-            } else {
-              // No caller: end execution
-              return retVal;
-            }
-            break;
-          }
-          case Op.HALT: {
-            // Stop execution entirely
-            return null;
-          }
-          case Op.NOT: {
-            const v = this.pop();
-            this.push(!v);
-            break;
-          }
-          case Op.TRY_PUSH: {
-            // arg is catchIp
-            const catchIp = inst.arg;
-            const stackHeight = this.stack.length;
-            frame.tryStack.push({ catchIp, stackHeight });
-            break;
-          }
-          case Op.TRY_POP: {
-            frame.tryStack.pop();
-            break;
-          }
-          case Op.THROW: {
-            const ex = this.pop();
-            // Unwind frames until a handler is found
-            let handled = false;
-            while (this.frames.length > 0) {
-              const cur = this.frames[this.frames.length - 1];
-              if (cur.tryStack && cur.tryStack.length > 0) {
-                const handler = cur.tryStack.pop();
-                // Reset stack to handler.stackHeight and push exception
-                this.stack.length = handler.stackHeight;
-                this.stack.push(ex);
-                // Set ip to handler.catchIp in that frame
-                cur.ip = handler.catchIp;
-                handled = true;
-                break;
-              } else {
-                // No handler in this frame: pop it
-                this.frames.pop();
-              }
-            }
-            if (!handled) {
-              // Uncaught exception: throw to host
-              throw new Error("Uncaught exception: " + (ex && ex.message ? ex.message : String(ex)));
-            }
-            break;
-          }
-          default:
-            throw new Error("Unknown opcode: " + inst.op);
-        }
-      } catch (err) {
-        // If an error occurs during instruction execution, attempt to unwind using TRY stacks
-        // Create an exception object
-        const exObj = { message: err.message || String(err), _native: err };
-        let handled = false;
-        while (this.frames.length > 0) {
-          const cur = this.frames[this.frames.length - 1];
-          if (cur.tryStack && cur.tryStack.length > 0) {
-            const handler = cur.tryStack.pop();
-            this.stack.length = handler.stackHeight;
-            this.stack.push(exObj);
-            cur.ip = handler.catchIp;
-            handled = true;
-            break;
-          } else {
-            this.frames.pop();
-          }
-        }
-        if (!handled) {
-          // No handler found: rethrow to host
-          throw err;
-        }
-      }
-    } // end while frames
-    return null;
+      
+      // No catch in this frame, pop it and continue search
+      this.frames.pop();
+    }
+    
+    // If we get here, unhandled exception
+    console.error("❌ Uncaught Vexon Error:", errorMsg);
+    process.exit(1);
   }
-}
 
-module.exports = { Lexer, Parser, Compiler, VM, Op };
+  async run() {
+    // tryStack initialized in frames
+    this.frames.push({ code: this.code, consts: this.consts, ip: 0, locals: {}, baseDir: this.baseDir, isGlobal: true, tryStack: [] });
+
+    while (this.frames.length > 0) {
+      // UPDATED: Wrap execution in try/catch to handle JS errors in builtins
+      try {
+        const frame = this.frames[this.frames.length - 1];
+        const code = frame.code;
+        while (frame.ip < code.length) {
+          const inst = code[frame.ip++];
+          if (!inst || !inst.op) continue;
+          switch (inst.op) {
+            case Op.CONST: {
+              const v = frame.consts[inst.arg];
+              this.stack.push(v);
+              break;
+            }
+            case Op.LOAD: {
+              const name = frame.consts[inst.arg];
+              if (typeof name === "string") {
+                if (name.includes(".") && this.globals.has(name)) {
+                  this.stack.push(this.globals.get(name));
+                } else {
+                  const val = this.lookup(name);
+                  if (val === undefined) this.stack.push(null);
+                  else this.stack.push(val);
+                }
+              } else {
+                this.stack.push(name);
+              }
+              break;
+            }
+            case Op.STORE: {
+              const name = frame.consts[inst.arg];
+              const val = this.stack.pop();
+              if (frame.isGlobal) {
+                this.globals.set(name, val);
+              } else {
+                frame.locals[name] = val;
+              }
+              break;
+            }
+            case Op.POP: { this.stack.pop(); break; }
+            case Op.ADD: {
+              const b = this.stack.pop(); const a = this.stack.pop();
+              if (typeof a === "string" || typeof b === "string") this.stack.push(String(a) + String(b));
+              else this.stack.push(a + b);
+              break;
+            }
+            case Op.SUB: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a - b); break; }
+            case Op.MUL: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a * b); break; }
+            case Op.DIV: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a / b); break; }
+            case Op.MOD: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a % b); break; }
+            case Op.EQ: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a === b); break; }
+            case Op.NEQ: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a !== b); break; }
+            case Op.LT: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a < b); break; }
+            case Op.LTE: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a <= b); break; }
+            case Op.GT: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a > b); break; }
+            case Op.GTE: { const b = this.stack.pop(); const a = this.stack.pop(); this.stack.push(a >= b); break; }
+            case Op.NOT: { const a = this.stack.pop(); this.stack.push(!a); break; }
+
+            case Op.NEWARRAY: {
+              const n = inst.arg;
+              const arr = [];
+              for (let i = 0; i < n; i++) arr.unshift(this.stack.pop());
+              this.stack.push(arr);
+              break;
+            }
+            case Op.NEWOBJ: {
+              const n = inst.arg;
+              const obj = {};
+              for (let i = 0; i < n; i++) {
+                const val = this.stack.pop();
+                const key = this.stack.pop();
+                obj[key] = val;
+              }
+              this.stack.push(obj);
+              break;
+            }
+            case Op.INDEX: {
+              const idx = this.stack.pop();
+              const target = this.stack.pop();
+              if (Array.isArray(target)) this.stack.push(target[idx]);
+              else if (target && typeof target === "object") this.stack.push(target[idx]);
+              else this.stack.push(null);
+              break;
+            }
+            case Op.SETINDEX: {
+              const val = this.stack.pop();
+              const idx = this.stack.pop();
+              const target = this.stack.pop();
+              if (Array.isArray(target)) target[idx] = val;
+              else if (target && typeof target === "object") target[idx] = val;
+              this.stack.push(val);
+              break;
+            }
+            // NEW: implement SETPROP (target, key, value) -> sets property and pushes value
+            case Op.SETPROP: {
+              const val = this.stack.pop();
+              const key = this.stack.pop();
+              const target = this.stack.pop();
+              if (target && typeof target === "object") target[key] = val;
+              this.stack.push(val);
+              break;
+            }
+            case Op.CALL: {
+              const argc = inst.arg;
+              const args = [];
+              for (let i = 0; i < argc; i++) args.unshift(this.stack.pop());
+              const callee = this.stack.pop();
+
+              if (callee && callee.builtin && typeof callee.call === "function") {
+                const res = callee.call(args);
+                if (res && typeof res.then === "function") {
+                  const awaited = await res;
+                  this.stack.push(awaited);
+                } else {
+                  this.stack.push(res);
+                }
+                break;
+              }
+
+              if (callee && typeof callee === "object" && !callee.builtin && callee.value) {
+                this.stack.push(null);
+                break;
+              }
+
+              if (callee && typeof callee === "object" && callee.params && callee.code) {
+                const newFrame = { code: callee.code, consts: callee.consts, ip: 0, locals: {}, baseDir: frame.baseDir, isGlobal: false, tryStack: [] };
+                for (let i = 0; i < callee.params.length; i++) {
+                  newFrame.locals[callee.params[i]] = args[i];
+                }
+                this.frames.push(newFrame);
+                break;
+              }
+
+              if (typeof callee === "string") {
+                const val = this.lookup(callee);
+                if (val && val.builtin && typeof val.call === "function") {
+                  const res = val.call(args);
+                  if (res && typeof res.then === "function") {
+                    const awaited = await res;
+                    this.stack.push(awaited);
+                  } else {
+                    this.stack.push(res);
+                  }
+                  break;
+                }
+                if (val && typeof val === "object" && val.params && val.code) {
+                  const newFrame = { code: val.code, consts: val.consts, ip: 0, locals: {}, baseDir: frame.baseDir, isGlobal: false, tryStack: [] };
+                  for (let i = 0; i < val.params.length; i++) newFrame.locals[val.params[i]] = args[i];
+                  this.frames.push(newFrame);
+                  break;
+                }
+              }
+
+              if (typeof callee === "function") {
+                const res = callee(...args);
+                if (res && typeof res.then === "function") {
+                  const awaited = await res;
+                  this.stack.push(awaited);
+                } else {
+                  this.stack.push(res);
+                }
+                break;
+              }
+
+              this.stack.push(null);
+              break;
+            }
+
+            case Op.RET: {
+              const retVal = this.stack.length ? this.stack.pop() : null;
+              this.frames.pop();
+              if (this.frames.length === 0) {
+                return;
+              } else {
+                this.stack.push(retVal);
+                break;
+              }
+            }
+
+            case Op.JMP: { frame.ip = inst.arg; break; }
+            case Op.JMPF: {
+              const cond = this.stack.pop();
+              if (!cond) frame.ip = inst.arg;
+              break;
+            }
+
+            // UPDATED: Exception opcodes
+            case Op.TRY_PUSH: {
+              const catchAddr = inst.arg;
+              if (!frame.tryStack) frame.tryStack = [];
+              frame.tryStack.push({ catchIp: catchAddr, stackHeight: this.stack.length });
+              break;
+            }
+            case Op.TRY_POP: {
+              if (frame.tryStack) frame.tryStack.pop();
+              break;
+            }
+            case Op.THROW: {
+              const err = this.stack.pop();
+              throw new Error(err); // Throw to JS, which catches in run() loop
+            }
+
+            case Op.IMPORT: {
+              const importFileConst = frame.consts[inst.arg];
+              let importPath = String(importFileConst);
+
+              const currentBase = frame.baseDir || this.baseDir;
+              let resolvedPath = importPath;
+              if (!path.isAbsolute(importPath)) resolvedPath = path.resolve(currentBase, importPath);
+              if (!path.extname(resolvedPath)) resolvedPath += ".vx";
+              resolvedPath = path.normalize(resolvedPath);
+
+              if (this.importCache.has(resolvedPath)) {
+                const cached = this.importCache.get(resolvedPath);
+                if (cached && typeof cached.then === "function") {
+                  const moduleObj = await cached;
+                  this.stack.push(moduleObj);
+                  break;
+                } else {
+                  this.stack.push(cached);
+                  break;
+                }
+              }
+
+              if (!fs.existsSync(resolvedPath)) {
+                throw new Error("Import failed: file not found: " + resolvedPath);
+              }
+
+              const loadPromise = (async () => {
+                const src = fs.readFileSync(resolvedPath, "utf8");
+                const lexer = new Lexer(src);
+                const tokens = lexer.lex();
+                const parser = new Parser(tokens);
+                const stmts = parser.parseProgram();
+                const compiler = new Compiler();
+                const compiled = compiler.compile(stmts);
+
+                const childVM = new VM(compiled.consts, compiled.code, { baseDir: path.dirname(resolvedPath), debug: this.debug });
+
+                const placeholder = {};
+                this.importCache.set(resolvedPath, placeholder);
+
+                await childVM.run();
+
+                const moduleObj = {};
+                for (const [k, v] of childVM.globals.entries()) {
+                  moduleObj[k] = v;
+                }
+
+                this.importCache.set(resolvedPath, moduleObj);
+                return moduleObj;
+              })();
+
+              this.importCache.set(resolvedPath, loadPromise);
+              const moduleObj = await loadPromise;
+              this.stack.push(moduleObj);
+              break;
+            }
+
+            case Op.HALT: {
+              this.frames.pop();
+              if (this.frames.length === 0) return;
+              break;
+            }
+
+            default:
+              throw new Error("Unknown opcode: " + inst.op);
+          } 
+        } 
+      } catch (err) {
+        // UPDATED: Catch both JS errors and THROW opcode errors
+        this.handleException(err);
+      }
+    } 
+  } 
+} 
+
+module.exports = { Lexer, Parser, Compiler, VM };
