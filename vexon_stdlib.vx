@@ -1,6 +1,19 @@
-// VEXON STANDARD LIBRARY (50 namespaces)
-// Save as vexon_stdlib.vx
-// Import with: import "vexon_stdlib.vx" as std
+// vexon_stdlib.vx
+// Patched Vexon Standard Library (50 namespaces)
+// - Fixed control-flow syntax to use braces
+// - Added defensive checks
+// - Avoided fragile fallbacks where possible
+// - Registers `std` as a global if `global_set` is available
+//
+// Save next to your Vexon runtime and import with:
+//   import "vexon_stdlib.vx" as std
+//
+// Note: this file assumes the VM exposes builtins seen in your runtime:
+// print, read, write, append, exists, delete, list, mkdir, json_encode, json_decode,
+// time, random, toUpper, toLower, substring, split, indexOf, replace, startsWith, endsWith,
+// parseInt, join_path, exec, env, set_env, global_set, global_get
+//
+// If any builtin is missing, adjust the function to avoid it.
 
 let std = {}
 
@@ -8,18 +21,33 @@ let std = {}
 // 1. string
 // ---------------------------
 fn string_reverse(s) {
+  if s == null { return "" }
   let out = ""
   let i = len(s) - 1
-  while (i >= 0) { out = out + s[i]; i = i - 1 }
+  while (i >= 0) {
+    out = out + s[i]
+    i = i - 1
+  }
   return out
 }
 fn string_capitalize(s) {
-  if (len(s) == 0) return ""
-  return toUpper(s[0]) + substring(s, 1)
+  if s == null { return "" }
+  if len(s) == 0 {
+    return ""
+  }
+  let first = substring(s, 0, 1)
+  let rest = substring(s, 1)
+  return toUpper(first) + rest
 }
 fn string_repeat(s, n) {
-  let out = ""; let i = 0
-  while (i < n) { out = out + s; i = i + 1 }
+  if s == null { return "" }
+  if n <= 0 { return "" }
+  let out = ""
+  let i = 0
+  while (i < n) {
+    out = out + s
+    i = i + 1
+  }
   return out
 }
 std.string = {}
@@ -30,9 +58,18 @@ std.string.repeat = string_repeat
 // ---------------------------
 // 2. text
 // ---------------------------
-fn text_bold(s) { return "**" + s + "**" }
-fn text_italic(s) { return "*" + s + "*" }
-fn text_code(s) { return "`" + s + "`" }
+fn text_bold(s) {
+  if s == null { return "" }
+  return "**" + s + "**"
+}
+fn text_italic(s) {
+  if s == null { return "" }
+  return "*" + s + "*"
+}
+fn text_code(s) {
+  if s == null { return "" }
+  return "`" + s + "`"
+}
 std.text = {}
 std.text.bold = text_bold
 std.text.italic = text_italic
@@ -41,11 +78,20 @@ std.text.code = text_code
 // ---------------------------
 // 3. search
 // ---------------------------
-fn search_contains(s, sub) { return indexOf(s, sub) != -1 }
+fn search_contains(s, sub) {
+  if s == null || sub == null { return false }
+  return indexOf(s, sub) != -1
+}
 fn search_count(s, sub) {
-  let c = 0; let i = 0
-  while (i <= len(s)-len(sub)) {
-    if (substring(s, i, i+len(sub)) == sub) c = c + 1
+  if s == null || sub == null { return 0 }
+  let c = 0
+  let i = 0
+  let limit = len(s) - len(sub)
+  if (limit < 0) { return 0 }
+  while (i <= limit) {
+    if (substring(s, i, i + len(sub)) == sub) {
+      c = c + 1
+    }
     i = i + 1
   }
   return c
@@ -57,8 +103,14 @@ std.search.count = search_count
 // ---------------------------
 // 4. unicode
 // ---------------------------
-fn unicode_is_digit(c) { return c >= "0" && c <= "9" }
-fn unicode_is_alpha(c) { return (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") }
+fn unicode_is_digit(c) {
+  if c == null { return false }
+  return c >= "0" && c <= "9"
+}
+fn unicode_is_alpha(c) {
+  if c == null { return false }
+  return (c >= "a" && c <= "z") || (c >= "A" && c <= "Z")
+}
 std.unicode = {}
 std.unicode.is_digit = unicode_is_digit
 std.unicode.is_alpha = unicode_is_alpha
@@ -67,12 +119,20 @@ std.unicode.is_alpha = unicode_is_alpha
 // 5. parse
 // ---------------------------
 fn parse_bool(s) {
+  if s == null { return null }
   let t = toLower(trim(s))
-  if (t == "true") return true
-  if (t == "false") return false
+  if t == "true" {
+    return true
+  }
+  if t == "false" {
+    return false
+  }
   return null
 }
-fn parse_csv(s) { return split(s, ",") }
+fn parse_csv(s) {
+  if s == null { return [] }
+  return split(s, ",")
+}
 std.parse = {}
 std.parse.bool = parse_bool
 std.parse.csv = parse_csv
@@ -80,9 +140,33 @@ std.parse.csv = parse_csv
 // ---------------------------
 // 6. array
 // ---------------------------
-fn array_sum(a) { let s = 0; for x in a s = s + x; return s }
-fn array_avg(a) { if (len(a) == 0) return 0; return array_sum(a) / len(a) }
-fn array_max(a) { if (len(a) == 0) return null; let m = a[0]; for x in a if x > m m = x; return m }
+fn array_sum(a) {
+  if a == null { return 0 }
+  let s = 0
+  for x in a {
+    s = s + x
+  }
+  return s
+}
+fn array_avg(a) {
+  if a == null { return 0 }
+  if len(a) == 0 {
+    return 0
+  }
+  return array_sum(a) / len(a)
+}
+fn array_max(a) {
+  if a == null || len(a) == 0 {
+    return null
+  }
+  let m = a[0]
+  for x in a {
+    if x > m {
+      m = x
+    }
+  }
+  return m
+}
 std.array = {}
 std.array.sum = array_sum
 std.array.avg = array_avg
@@ -92,17 +176,31 @@ std.array.max = array_max
 // 7. list_ops
 // ---------------------------
 fn list_unique(a) {
+  if a == null { return [] }
   let out = []
   for x in a {
     let f = false
-    for y in out if (x == y) f = true
-    if (!f) push(out, x)
+    for y in out {
+      if x == y {
+        f = true
+        break
+      }
+    }
+    if (!f) {
+      push(out, x)
+    }
   }
   return out
 }
 fn list_find(a, v) {
+  if a == null { return -1 }
   let i = 0
-  while (i < len(a)) { if (a[i] == v) return i; i = i + 1 }
+  while (i < len(a)) {
+    if a[i] == v {
+      return i
+    }
+    i = i + 1
+  }
   return -1
 }
 std.list = {}
@@ -113,11 +211,17 @@ std.list.find = list_find
 // 8. sort
 // ---------------------------
 fn sort_bubble(a) {
-  let n = len(a); let i = 0
+  if a == null { return [] }
+  let n = len(a)
+  let i = 0
   while (i < n) {
     let j = 0
-    while (j < n-1) {
-      if (a[j] > a[j+1]) { let t = a[j]; a[j] = a[j+1]; a[j+1] = t }
+    while (j < n - 1) {
+      if a[j] > a[j + 1] {
+        let t = a[j]
+        a[j] = a[j + 1]
+        a[j + 1] = t
+      }
       j = j + 1
     }
     i = i + 1
@@ -131,9 +235,22 @@ std.sort.bubble = sort_bubble
 // 9. stack
 // ---------------------------
 let _stack_internal = []
-fn stack_push(v) { push(_stack_internal, v) }
-fn stack_pop() { return pop(_stack_internal) }
-fn stack_peek() { if (len(_stack_internal)==0) return null; return _stack_internal[len(_stack_internal)-1] }
+fn stack_push(v) {
+  push(_stack_internal, v)
+  return null
+}
+fn stack_pop() {
+  if len(_stack_internal) == 0 {
+    return null
+  }
+  return pop(_stack_internal)
+}
+fn stack_peek() {
+  if len(_stack_internal) == 0 {
+    return null
+  }
+  return _stack_internal[len(_stack_internal) - 1]
+}
 std.stack = {}
 std.stack.push = stack_push
 std.stack.pop = stack_pop
@@ -143,12 +260,20 @@ std.stack.peek = stack_peek
 // 10. queue
 // ---------------------------
 let _queue_internal = []
-fn queue_enqueue(v) { push(_queue_internal, v) }
+fn queue_enqueue(v) {
+  push(_queue_internal, v)
+  return null
+}
 fn queue_dequeue() {
-  if (len(_queue_internal) == 0) return null
+  if len(_queue_internal) == 0 {
+    return null
+  }
   let out = _queue_internal[0]
   let i = 0
-  while (i < len(_queue_internal)-1) { _queue_internal[i] = _queue_internal[i+1]; i = i + 1 }
+  while (i < len(_queue_internal) - 1) {
+    _queue_internal[i] = _queue_internal[i + 1]
+    i = i + 1
+  }
   pop(_queue_internal)
   return out
 }
@@ -159,9 +284,27 @@ std.queue.dequeue = queue_dequeue
 // ---------------------------
 // 11. math
 // ---------------------------
-fn math_clamp(x, a, b) { if (x < a) return a; if (x > b) return b; return x }
-fn math_lerp(a, b, t) { return a + (b - a) * t }
-fn math_sign(x) { if (x > 0) return 1; if (x < 0) return -1; return 0 }
+fn math_clamp(x, a, b) {
+  if x < a {
+    return a
+  }
+  if x > b {
+    return b
+  }
+  return x
+}
+fn math_lerp(a, b, t) {
+  return a + (b - a) * t
+}
+fn math_sign(x) {
+  if x > 0 {
+    return 1
+  }
+  if x < 0 {
+    return -1
+  }
+  return 0
+}
 std.mathx = {}
 std.mathx.clamp = math_clamp
 std.mathx.lerp = math_lerp
@@ -170,8 +313,14 @@ std.mathx.sign = math_sign
 // ---------------------------
 // 12. geometry
 // ---------------------------
-fn geom_dist(x1,y1,x2,y2) { let dx=x2-x1; let dy=y2-y1; return math.sqrt(dx*dx + dy*dy) }
-fn geom_area_rect(w,h) { return w * h }
+fn geom_dist(x1, y1, x2, y2) {
+  let dx = x2 - x1
+  let dy = y2 - y1
+  return math.sqrt(dx * dx + dy * dy)
+}
+fn geom_area_rect(w, h) {
+  return w * h
+}
 std.geometry = {}
 std.geometry.dist = geom_dist
 std.geometry.area_rect = geom_area_rect
@@ -179,9 +328,18 @@ std.geometry.area_rect = geom_area_rect
 // ---------------------------
 // 13. vector2
 // ---------------------------
-fn v2_add(a, b) { return {x: a.x + b.x, y: a.y + b.y} }
-fn v2_sub(a, b) { return {x: a.x - b.x, y: a.y - b.y} }
-fn v2_scale(a, s) { return {x: a.x * s, y: a.y * s} }
+fn v2_add(a, b) {
+  if a == null || b == null { return {x:0, y:0} }
+  return { x: a.x + b.x, y: a.y + b.y }
+}
+fn v2_sub(a, b) {
+  if a == null || b == null { return {x:0, y:0} }
+  return { x: a.x - b.x, y: a.y - b.y }
+}
+fn v2_scale(a, s) {
+  if a == null { return {x:0, y:0} }
+  return { x: a.x * s, y: a.y * s }
+}
 std.vector2 = {}
 std.vector2.add = v2_add
 std.vector2.sub = v2_sub
@@ -191,15 +349,27 @@ std.vector2.scale = v2_scale
 // 14. fs
 // ---------------------------
 fn fs_read_lines(p) {
-  if (!exists(p)) return []
+  if !exists(p) {
+    return []
+  }
   return split(read(p), "\n")
 }
 fn fs_write_lines(p, arr) {
+  if arr == null { return null }
   let s = ""
-  for x in arr s = s + x + "\n"
+  for x in arr {
+    s = s + x + "\n"
+  }
   write(p, s)
+  return null
 }
-fn fs_copy(a,b) { write(b, read(a)) }
+fn fs_copy(a, b) {
+  if !exists(a) {
+    return null
+  }
+  write(b, read(a))
+  return null
+}
 std.fs = {}
 std.fs.read_lines = fs_read_lines
 std.fs.write_lines = fs_write_lines
@@ -208,9 +378,16 @@ std.fs.copy = fs_copy
 // ---------------------------
 // 15. time
 // ---------------------------
-fn time_now() { return time() }
-fn time_sleep_ms(ms) { sleep(ms); return null }
-fn time_ts() { return toString(time()) }
+fn time_now() {
+  return time()
+}
+fn time_sleep_ms(ms) {
+  sleep(ms)
+  return null
+}
+fn time_ts() {
+  return toString(time())
+}
 std.time = {}
 std.time.now = time_now
 std.time.sleep_ms = time_sleep_ms
@@ -219,13 +396,26 @@ std.time.ts = time_ts
 // ---------------------------
 // 16. random
 // ---------------------------
-fn rnd_int(min, max) { return floor(random() * (max - min + 1)) + min }
-fn rnd_choice(a) { if (len(a)==0) return null; return a[rnd_int(0, len(a)-1)] }
+fn rnd_int(min, max) {
+  if min > max {
+    let t = min; min = max; max = t
+  }
+  return floor(random() * (max - min + 1)) + min
+}
+fn rnd_choice(a) {
+  if a == null || len(a) == 0 {
+    return null
+  }
+  return a[rnd_int(0, len(a) - 1)]
+}
 fn rnd_shuffle(a) {
-  let i = len(a)-1
+  if a == null { return [] }
+  let i = len(a) - 1
   while (i > 0) {
     let j = rnd_int(0, i)
-    let t = a[i]; a[i] = a[j]; a[j] = t
+    let t = a[i]
+    a[i] = a[j]
+    a[j] = t
     i = i - 1
   }
   return a
@@ -238,9 +428,21 @@ std.random.shuffle = rnd_shuffle
 // ---------------------------
 // 17. log
 // ---------------------------
-fn log_write(m) { append("vexon.log", "[" + toString(time()) + "] " + m + "\n") }
-fn log_read_all() { if (!exists("vexon.log")) return ""; return read("vexon.log") }
-fn log_clear() { write("vexon.log", "") }
+fn log_write(m) {
+  if m == null { m = "" }
+  append("vexon.log", "[" + toString(time()) + "] " + m + "\n")
+  return null
+}
+fn log_read_all() {
+  if !exists("vexon.log") {
+    return ""
+  }
+  return read("vexon.log")
+}
+fn log_clear() {
+  write("vexon.log", "")
+  return null
+}
 std.log = {}
 std.log.write = log_write
 std.log.read = log_read_all
@@ -249,8 +451,15 @@ std.log.clear = log_clear
 // ---------------------------
 // 18. env
 // ---------------------------
-fn env_get(n) { return env(n) }
-fn env_set(n,v) { set_env(n, v); return null }
+fn env_get(n) {
+  if n == null { return env() }
+  return env(n)
+}
+fn env_set(n, v) {
+  if n == null { return null }
+  set_env(n, v)
+  return null
+}
 std.env = {}
 std.env.get = env_get
 std.env.set = env_set
@@ -258,10 +467,22 @@ std.env.set = env_set
 // ---------------------------
 // 19. json
 // ---------------------------
-fn json_enc(o) { return json_encode(o) }
-fn json_dec(s) { return json_decode(s) }
-fn json_save(p,o) { write(p, json_encode(o)); return null }
-fn json_load(p) { return json_decode(read(p)) }
+fn json_enc(o) {
+  return json_encode(o)
+}
+fn json_dec(s) {
+  return json_decode(s)
+}
+fn json_save(p, o) {
+  write(p, json_encode(o))
+  return null
+}
+fn json_load(p) {
+  if !exists(p) {
+    return null
+  }
+  return json_decode(read(p))
+}
 std.json = {}
 std.json.encode = json_enc
 std.json.decode = json_dec
@@ -271,12 +492,21 @@ std.json.load = json_load
 // ---------------------------
 // 20. path
 // ---------------------------
-fn path_join(a,b) { return join_path(a,b) }
+fn path_join(a, b) {
+  return join_path(a, b)
+}
 fn path_filename(p) {
-  let arr = split(p, "/"); return arr[len(arr)-1]
+  if p == null { return "" }
+  let arr = split(p, "/")
+  return arr[len(arr) - 1]
 }
 fn path_ext(p) {
-  let arr = split(p, "."); if (len(arr)<2) return ""; return arr[len(arr)-1]
+  if p == null { return "" }
+  let arr = split(p, ".")
+  if len(arr) < 2 {
+    return ""
+  }
+  return arr[len(arr) - 1]
 }
 std.path = {}
 std.path.join = path_join
@@ -286,8 +516,14 @@ std.path.ext = path_ext
 // ---------------------------
 // 21. http (wrapper)
 // ---------------------------
-fn http_get_json(url) { return http_get(url) }
-fn http_post_json(url, payload) { return http_post(url, payload) }
+fn http_get_json(url) {
+  if url == null { return null }
+  return http_get(url)
+}
+fn http_post_json(url, payload) {
+  if url == null { return null }
+  return http_post(url, payload)
+}
 std.http = {}
 std.http.get = http_get_json
 std.http.post = http_post_json
@@ -296,7 +532,7 @@ std.http.post = http_post_json
 // 22. net (tiny helpers)
 // ---------------------------
 fn net_ping(url) {
-  // simple: try GET and return truthy if succeeds
+  if url == null { return false }
   try {
     let r = http_get(url)
     return true
@@ -308,23 +544,18 @@ std.net = {}
 std.net.ping = net_ping
 
 // ---------------------------
-// 23. base64 (simple)
+// 23. base64 (simple wrapper)
 // ---------------------------
+// Use exec to call node Buffer if available; otherwise return null (explicit)
 fn b64_encode_js(s) {
-  // attempt: use Buffer via exec if available; fallback simple map (not robust)
+  if s == null { return null }
   try {
-    let out = exec("node -e \"console.log(Buffer.from(" + JSON.stringify(s) + ").toString('base64'))\"")
+    // exec may return stdout or may be void depending on runtime; attempt and return null on failure
+    let cmd = "node -e \"console.log(Buffer.from(" + json_encode(s) + ").toString('base64'))\""
+    let out = exec(cmd)
     return out
   } catch (e) {
-    // fallback naive (not binary safe)
-    let chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-    let out = ""
-    let i = 0
-    while (i < len(s)) {
-      out = out + s[i]
-      i = i + 1
-    }
-    return out
+    return null
   }
 }
 std.base64 = {}
@@ -337,12 +568,12 @@ fn uuid_v4_like() {
   let a = ""
   let i = 0
   while (i < 32) {
-    let n = rnd_int(0,15)
+    let n = rnd_int(0, 15)
     let h = "0123456789abcdef"[n]
     a = a + h
     i = i + 1
   }
-  return substring(a,0,8) + "-" + substring(a,8,12) + "-" + substring(a,12,16) + "-" + substring(a,16,20) + "-" + substring(a,20,32)
+  return substring(a, 0, 8) + "-" + substring(a, 8, 12) + "-" + substring(a, 12, 16) + "-" + substring(a, 16, 20) + "-" + substring(a, 20, 32)
 }
 std.uuid = {}
 std.uuid.v4 = uuid_v4_like
@@ -351,17 +582,29 @@ std.uuid.v4 = uuid_v4_like
 // 25. csv
 // ---------------------------
 fn csv_parse(text) {
+  if text == null { return [] }
   let lines = split(text, "\n")
   let out = []
   for l in lines {
-    if (len(trim(l)) == 0) continue
+    if len(trim(l)) == 0 {
+      continue
+    }
     push(out, split(l, ","))
   }
   return out
 }
 fn csv_stringify(arr) {
+  if arr == null { return "" }
   let out = ""
-  for r in arr { let i = 0; let line = ""; while (i < len(r)) { line = line + toString(r[i]) + (i < len(r)-1 ? "," : ""); i = i + 1 } out = out + line + "\n" }
+  for r in arr {
+    let i = 0
+    let line = ""
+    while (i < len(r)) {
+      line = line + toString(r[i]) + (i < len(r) - 1 ? "," : "")
+      i = i + 1
+    }
+    out = out + line + "\n"
+  }
   return out
 }
 std.csv = {}
@@ -372,9 +615,11 @@ std.csv.stringify = csv_stringify
 // 26. validators
 // ---------------------------
 fn is_email(s) {
+  if s == null { return false }
   return indexOf(s, "@") != -1 && indexOf(s, ".") != -1
 }
 fn is_url(s) {
+  if s == null { return false }
   return startsWith(s, "http://") || startsWith(s, "https://")
 }
 std.validators = {}
@@ -384,8 +629,13 @@ std.validators.url = is_url
 // ---------------------------
 // 27. stopwatch
 // ---------------------------
-fn sw_start() { return time() }
-fn sw_elapsed(start) { return time() - start }
+fn sw_start() {
+  return time()
+}
+fn sw_elapsed(start) {
+  if start == null { return 0 }
+  return time() - start
+}
 std.stopwatch = {}
 std.stopwatch.start = sw_start
 std.stopwatch.elapsed = sw_elapsed
@@ -393,12 +643,17 @@ std.stopwatch.elapsed = sw_elapsed
 // ---------------------------
 // 28. stats
 // ---------------------------
-fn stats_mean(a) { if (len(a)==0) return null; return array_sum(a) / len(a) }
+fn stats_mean(a) {
+  if a == null || len(a) == 0 { return null }
+  return array_sum(a) / len(a)
+}
 fn stats_variance(a) {
   let m = stats_mean(a)
-  if (m == null) return null
+  if m == null { return null }
   let s = 0
-  for x in a s = s + (x - m) * (x - m)
+  for x in a {
+    s = s + (x - m) * (x - m)
+  }
   return s / len(a)
 }
 std.stats = {}
@@ -409,12 +664,19 @@ std.stats.variance = stats_variance
 // 29. matrix (basic)
 // ---------------------------
 fn mat_mul_vec(mat, vec) {
+  if mat == null || vec == null { return [] }
   let out = []
   let i = 0
   while (i < len(mat)) {
-    let row = mat[i]; let s = 0; let j = 0
-    while (j < len(row)) { s = s + row[j] * vec[j]; j = j + 1 }
-    push(out, s); i = i + 1
+    let row = mat[i]
+    let s = 0
+    let j = 0
+    while (j < len(row)) {
+      s = s + row[j] * vec[j]
+      j = j + 1
+    }
+    push(out, s)
+    i = i + 1
   }
   return out
 }
@@ -425,14 +687,19 @@ std.matrix.mul_vec = mat_mul_vec
 // 30. data (key-value simple db)
 // ---------------------------
 fn kv_set(path, key, val) {
+  if path == null { return null }
   let store = {}
-  if (exists(path)) store = json_decode(read(path))
+  if exists(path) {
+    store = json_decode(read(path))
+  }
   store[key] = val
   write(path, json_encode(store))
   return null
 }
 fn kv_get(path, key) {
-  if (!exists(path)) return null
+  if path == null || !exists(path) {
+    return null
+  }
   let store = json_decode(read(path))
   return store[key]
 }
@@ -453,6 +720,7 @@ std.serializer.from_json = ser_from_json
 // 32. html_utils
 // ---------------------------
 fn html_escape(s) {
+  if s == null { return "" }
   let out = s
   out = replace(out, "&", "&amp;")
   out = replace(out, "<", "&lt;")
@@ -467,10 +735,20 @@ std.html.escape = html_escape
 // 33. shell (exec helpers)
 // ---------------------------
 fn sh_exec(cmd) {
-  return exec(cmd)
+  if cmd == null { return null }
+  try {
+    return exec(cmd)
+  } catch (e) {
+    return null
+  }
 }
 fn sh_capture(cmd) {
-  return exec(cmd)
+  if cmd == null { return null }
+  try {
+    return exec(cmd)
+  } catch (e) {
+    return null
+  }
 }
 std.shell = {}
 std.shell.exec = sh_exec
@@ -480,11 +758,17 @@ std.shell.capture = sh_capture
 // 34. colors (basic)
 // ---------------------------
 fn color_hex_to_rgb(hex) {
-  if (startsWith(hex, "#")) hex = substring(hex, 1)
-  let r = parseInt(substring(hex,0,2),16)
-  let g = parseInt(substring(hex,2,4),16)
-  let b = parseInt(substring(hex,4,6),16)
-  return {r: r, g: g, b: b}
+  if hex == null { return {r:0,g:0,b:0} }
+  if startsWith(hex, "#") {
+    hex = substring(hex, 1)
+  }
+  if len(hex) < 6 {
+    return { r: 0, g: 0, b: 0 }
+  }
+  let r = parseInt(substring(hex, 0, 2), 16)
+  let g = parseInt(substring(hex, 2, 4), 16)
+  let b = parseInt(substring(hex, 4, 6), 16)
+  return { r: r, g: g, b: b }
 }
 std.color = {}
 std.color.hex_to_rgb = color_hex_to_rgb
@@ -493,8 +777,15 @@ std.color.hex_to_rgb = color_hex_to_rgb
 // 35. terminal (tiny styling)
 // ---------------------------
 fn term_clear() {
-  // best-effort clear
-  try { exec("clear") } catch (e) { try { exec("cls") } catch (e2) {} }
+  try {
+    exec("clear")
+  } catch (e) {
+    try {
+      exec("cls")
+    } catch (e2) {
+      // ignore
+    }
+  }
   return null
 }
 std.terminal = {}
@@ -505,9 +796,20 @@ std.terminal.clear = term_clear
 // ---------------------------
 fn schedule_sleep_then(ms, fnname) {
   sleep(ms)
-  // call global function by name if exists
-  let f = global_get(fnname)
-  if (f) f()
+  if fnname == null { return null }
+  let f = null
+  try {
+    f = global_get(fnname)
+  } catch (e) {
+    f = null
+  }
+  if f {
+    try {
+      f()
+    } catch (e2) {
+      // ignore
+    }
+  }
   return null
 }
 std.scheduler = {}
@@ -516,7 +818,7 @@ std.scheduler.sleep_then = schedule_sleep_then
 // ---------------------------
 // 37. compression (placeholder)
 // ---------------------------
-fn compress_stub(s) { return s } // no real compression here
+fn compress_stub(s) { return s }
 fn decompress_stub(s) { return s }
 std.compress = {}
 std.compress.compress = compress_stub
@@ -525,8 +827,14 @@ std.compress.decompress = decompress_stub
 // ---------------------------
 // 38. encoding (utf helpers)
 // ---------------------------
-fn enc_upper(s) { return toUpper(s) }
-fn enc_lower(s) { return toLower(s) }
+fn enc_upper(s) {
+  if s == null { return "" }
+  return toUpper(s)
+}
+fn enc_lower(s) {
+  if s == null { return "" }
+  return toLower(s)
+}
 std.encoding = {}
 std.encoding.upper = enc_upper
 std.encoding.lower = enc_lower
@@ -535,9 +843,15 @@ std.encoding.lower = enc_lower
 // 39. math_more
 // ---------------------------
 fn mm_factorial(n) {
-  if (n <= 1) return 1
-  let r = 1; let i = 2
-  while (i <= n) { r = r * i; i = i + 1 }
+  if n <= 1 {
+    return 1
+  }
+  let r = 1
+  let i = 2
+  while (i <= n) {
+    r = r * i
+    i = i + 1
+  }
   return r
 }
 std.math_more = {}
@@ -546,9 +860,11 @@ std.math_more.factorial = mm_factorial
 // ---------------------------
 // 40. geometry3d (basic)
 // ---------------------------
-fn g3d_dist(x1,y1,z1,x2,y2,z2) {
-  let dx = x2-x1; let dy = y2-y1; let dz = z2-z1
-  return math.sqrt(dx*dx + dy*dy + dz*dz)
+fn g3d_dist(x1, y1, z1, x2, y2, z2) {
+  let dx = x2 - x1
+  let dy = y2 - y1
+  let dz = z2 - z1
+  return math.sqrt(dx * dx + dy * dy + dz * dz)
 }
 std.geometry3d = {}
 std.geometry3d.dist = g3d_dist
@@ -556,7 +872,9 @@ std.geometry3d.dist = g3d_dist
 // ---------------------------
 // 41. physics_basic
 // ---------------------------
-fn physics_kinematic_pos(x0, v, t) { return x0 + v * t }
+fn physics_kinematic_pos(x0, v, t) {
+  return x0 + v * t
+}
 std.physics = {}
 std.physics.kinematic_pos = physics_kinematic_pos
 
@@ -564,10 +882,22 @@ std.physics.kinematic_pos = physics_kinematic_pos
 // 42. game_loop (very small)
 // ---------------------------
 fn game_loop_simple(iterations, tick_ms, body_fn_name) {
+  if iterations == null || iterations <= 0 { return null }
   let i = 0
   while (i < iterations) {
-    let f = global_get(body_fn_name)
-    if (f) f(i)
+    let f = null
+    try {
+      f = global_get(body_fn_name)
+    } catch (e) {
+      f = null
+    }
+    if f {
+      try {
+        f(i)
+      } catch (e2) {
+        // ignore
+      }
+    }
     sleep(tick_ms)
     i = i + 1
   }
@@ -579,8 +909,15 @@ std.gameloop.simple = game_loop_simple
 // ---------------------------
 // 43. io_helpers
 // ---------------------------
-fn io_exists(p) { return exists(p) }
-fn io_delete(p) { delete(p); return null }
+fn io_exists(p) {
+  if p == null { return false }
+  return exists(p)
+}
+fn io_delete(p) {
+  if p == null { return null }
+  delete(p)
+  return null
+}
 std.io = {}
 std.io.exists = io_exists
 std.io.delete = io_delete
@@ -588,7 +925,11 @@ std.io.delete = io_delete
 // ---------------------------
 // 44. html_builder
 // ---------------------------
-fn hb_tag(name, content) { return "<" + name + ">" + content + "</" + name + ">" }
+fn hb_tag(name, content) {
+  if name == null { return "" }
+  if content == null { content = "" }
+  return "<" + name + ">" + content + "</" + name + ">"
+}
 std.html_builder = {}
 std.html_builder.tag = hb_tag
 
@@ -597,7 +938,7 @@ std.html_builder.tag = hb_tag
 // ---------------------------
 fn color_brightness(hex) {
   let c = color_hex_to_rgb(hex)
-  return (c.r*299 + c.g*587 + c.b*114) / 1000
+  return (c.r * 299 + c.g * 587 + c.b * 114) / 1000
 }
 std.color_utils = {}
 std.color_utils.brightness = color_brightness
@@ -605,14 +946,20 @@ std.color_utils.brightness = color_brightness
 // ---------------------------
 // 46. simple_ai (toy)
 // ---------------------------
-fn ai_echo(s) { return "ECHO: " + s }
+fn ai_echo(s) {
+  if s == null { return "" }
+  return "ECHO: " + s
+}
 std.ai = {}
 std.ai.echo = ai_echo
 
 // ---------------------------
 // 47. phone (formatting)
 // ---------------------------
-fn phone_digits(s) { return std.parse.csv(s) } // placeholder
+fn phone_digits(s) {
+  if s == null { return [] }
+  return split(s, ",")
+}
 std.phone = {}
 std.phone.digits = phone_digits
 
@@ -621,7 +968,9 @@ std.phone.digits = phone_digits
 // ---------------------------
 fn zpad(n, width) {
   let s = toString(n)
-  while (len(s) < width) s = "0" + s
+  while (len(s) < width) {
+    s = "0" + s
+  }
   return s
 }
 std.zstring = {}
@@ -630,7 +979,9 @@ std.zstring.pad = zpad
 // ---------------------------
 // 49. misc
 // ---------------------------
-fn misc_now_readable() { return toString(time()) }
+fn misc_now_readable() {
+  return toString(time())
+}
 std.misc = {}
 std.misc.now = misc_now_readable
 
@@ -638,11 +989,22 @@ std.misc.now = misc_now_readable
 // 50. dev_helpers
 // ---------------------------
 fn dev_print_keys(o) {
-  if (!o) return []
-  return keys(o)
+  if o == null { return [] }
+  let out = []
+  for k in o {
+    push(out, k)
+  }
+  return out
 }
 std.dev = {}
 std.dev.keys = dev_print_keys
+
+// Register std as a global if possible so importers can access it reliably
+try {
+  global_set("std", std)
+} catch (e) {
+  // ignore if global_set not available
+}
 
 // Return std as module export
 std
