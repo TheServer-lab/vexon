@@ -1,17 +1,14 @@
-// vexon_stdlib_fixed.vx
-// FULL 50-namespace Vexon standard library (compatible with conservative runtimes)
-// - Avoids unsupported syntax (no ternary ?:)
-// - Provides safe wrappers for missing builtins (trim, floor, sqrt, sleep fallbacks)
-// - Uses only conservative builtins listed in your runtime header when possible
-// - Registers `std` globally if global_set is available
-// Usage:
-//   import "vexon_stdlib_fixed.vx" as std
+// vexon_stdlib_fixed_v2.vx
+// Vexon standard library (50 namespaces) — updated and cleaned for the new Vexon runtime
+// - Conservative: avoids unsupported syntax and uses fallbacks for missing builtins
+// - Defensive: checks for null/exists and traps exceptions
+// - Registers `std` globally when possible and exports `std` at the end
+// Usage: import "vexon_stdlib_fixed_v2.vx" as std
 
 let std = {}
 
 // ---- helpers ------------------------------------------------------------
 fn _to_string(x) {
-  // conservative toString fallback using json_encode when available
   try {
     return json_encode(x)
   } catch (e) {
@@ -22,33 +19,41 @@ fn _to_string(x) {
 fn _trim(s) {
   if s == null { return "" }
   let out = s
-  while (startsWith(out, " ")) {
+  // trim start
+  while (len(out) > 0 && substring(out, 0, 1) == " ") {
     out = substring(out, 1)
   }
-  while (endsWith(out, " ")) {
+  // trim end
+  while (len(out) > 0 && substring(out, len(out) - 1, 1) == " ") {
     out = substring(out, 0, len(out) - 1)
   }
   return out
 }
 
 fn _floor(x) {
-  // parseInt should truncate toward zero for positives; for negative values behave like floor for ints
-  // Use parseInt as conservative fallback
+  if x == null { return 0 }
   try {
     return parseInt(x)
   } catch (e) {
-    // crude fallback
-    return x - (x % 1)
+    // fallback: emulate floor for finite numbers
+    try {
+      if x >= 0 { return x - (x % 1) }
+      // for negative numbers, truncation differs from floor; adjust
+      let t = x - (x % 1)
+      if t == x { return t }
+      return t - 1
+    } catch (e2) {
+      return x
+    }
   }
 }
 
 fn _sqrt(x) {
   if x == null { return 0 }
   if x <= 0 { return 0 }
-  // Newton's method
   let g = x
   let i = 0
-  while (i < 12) {
+  while (i < 20) {
     let ng = (g + x / g) / 2
     g = ng
     i = i + 1
@@ -60,45 +65,37 @@ fn _exec_get_stdout(cmd) {
   if cmd == null { return null }
   try {
     let r = exec(cmd)
-    // r could be string/stdout or object
+    if r == null { return null }
+    // r may be string or object
     try {
-      if r == null { return null }
       if typeof(r) == "object" {
         if r.stdout != null { return r.stdout }
         if r["stdout"] != null { return r["stdout"] }
-        // maybe exec returned {code:0, out:"..."}
         if r.out != null { return r.out }
-        // fallback to json
         try { return json_encode(r) } catch (e2) { return null }
       }
-      return r
-    } catch (ee) {
-      return r
-    }
+    } catch (ee) { /* ignore */ }
+    return r
   } catch (e) {
     return null
   }
 }
 
 fn _sleep_ms(ms) {
-  // try native sleep, else busy-wait using time()
   try {
     sleep(ms)
     return null
   } catch (e) {
     let start = time()
-    while ((time() - start) < ms) {
-      // busy wait
-    }
+    while ((time() - start) < ms) { }
     return null
   }
 }
 
-// stable array helpers using `append` and rewrite strategies
+// stable array helpers
 fn _arr_push(a, v) {
   if a == null { return null }
   try {
-    // prefer append builtin
     append(a, v)
     return null
   } catch (e) {
@@ -106,12 +103,11 @@ fn _arr_push(a, v) {
       push(a, v)
       return null
     } catch (e2) {
-      // fallback: recreate array
+      // fallback: rebuild
       let out = []
-      for x in a { push(out, x) }
-      push(out, v)
-      // mutate original by clearing then appending
-      while (len(a) > 0) { pop(a) }
+      for x in a { append(out, x) }
+      append(out, v)
+      while (len(a) > 0) { try { pop(a) } catch (ee) { break } }
       for x in out { append(a, x) }
       return null
     }
@@ -123,7 +119,6 @@ fn _arr_pop(a) {
   try {
     return pop(a)
   } catch (e) {
-    // manual pop: return last and rebuild array without last
     if len(a) == 0 { return null }
     let last = a[len(a) - 1]
     let out = []
@@ -132,7 +127,6 @@ fn _arr_pop(a) {
       append(out, a[i])
       i = i + 1
     }
-    // clear original
     while (len(a) > 0) { try { pop(a) } catch (ee) { break } }
     for x in out { append(a, x) }
     return last
@@ -155,12 +149,13 @@ fn string_capitalize(s) {
   if s == null { return "" }
   if len(s) == 0 { return "" }
   let first = substring(s, 0, 1)
-  let rest = substring(s, 1)
+  let rest = ""
+  if len(s) > 1 { rest = substring(s, 1) }
   try { return toUpper(first) + rest } catch (e) { return _to_string(first) + rest }
 }
 fn string_repeat(s, n) {
   if s == null { return "" }
-  if n <= 0 { return "" }
+  if n == null || n <= 0 { return "" }
   let out = ""
   let i = 0
   while (i < n) { out = out + s; i = i + 1 }
@@ -287,7 +282,6 @@ fn queue_dequeue() {
   let newarr = []
   let i = 1
   while (i < len(_queue_internal)) { append(newarr, _queue_internal[i]); i = i + 1 }
-  // replace internal
   while (len(_queue_internal) > 0) { _arr_pop(_queue_internal) }
   for x in newarr { append(_queue_internal, x) }
   return out
@@ -365,7 +359,7 @@ std.log.clear = log_clear
 // ---- 18 env ------------------------------------------------------------
 std.env = {}
 fn env_get(n) { if n == null { try { return env() } catch (e) { return null } } try { return env(n) } catch (e) { return null } }
-fn env_set(n, v) { if n == null { return null } try { set_env(n, v) } catch (e) { /* ignore */ } return null }
+fn env_set(n, v) { if n == null { return null } try { set_env(n, v) } catch (e) { } return null }
 std.env.get = env_get
 std.env.set = env_set
 
@@ -403,7 +397,7 @@ std.net.ping = net_ping
 
 // ---- 23 base64 ---------------------------------------------------------
 std.base64 = {}
-fn b64_encode_js(s) { if s == null { return null } try { let cmd = "node -e \"console.log(Buffer.from(" + json_encode(s) + ").toString('base64'))\""; let out = _exec_get_stdout(cmd); return out } catch (e) { return null } }
+fn b64_encode_js(s) { if s == null { return null } try { let cmd = "node -e \"console.log(Buffer.from(" + json_encode(s) + ").toString('base64'))\""; let out = _exec_get_stdout(cmd); return _trim(out) } catch (e) { return null } }
 std.base64.encode = b64_encode_js
 
 // ---- 24 uuid -----------------------------------------------------------
@@ -553,18 +547,7 @@ std.ai.echo = ai_echo
 
 // ---- 47 phone ----------------------------------------------------------
 std.phone = {}
-fn phone_digits(s) { if s == null { return [] } // split by non-digits conservatively
-  let out = []
-  let i = 0
-  let buf = ""
-  while (i < len(s)) {
-    let ch = substring(s, i, 1)
-    if unicode_is_digit(ch) { buf = buf + ch } else { if len(buf) > 0 { append(out, buf); buf = "" } }
-    i = i + 1
-  }
-  if len(buf) > 0 { append(out, buf) }
-  return out
-}
+fn phone_digits(s) { if s == null { return [] } let out = []; let i = 0; let buf = ""; while (i < len(s)) { let ch = substring(s, i, 1); if unicode_is_digit(ch) { buf = buf + ch } else { if len(buf) > 0 { append(out, buf); buf = "" } } i = i + 1 } if len(buf) > 0 { append(out, buf) } return out }
 std.phone.digits = phone_digits
 
 // ---- 48 zstring --------------------------------------------------------
