@@ -22,7 +22,8 @@ async function runFile(filePath, options = {}) {
     const lexer = new Lexer(src);
     const tokens = lexer.lex();
 
-    const parser = new Parser(tokens);
+    // pass source into Parser so error messages can show context
+    const parser = new Parser(tokens, src);
     const stmts = parser.parseProgram();
 
     const compiler = new Compiler();
@@ -31,7 +32,9 @@ async function runFile(filePath, options = {}) {
     const vm = new VM(consts, code, { baseDir: path.dirname(absPath), debug: !!options.debug });
     await vm.run();
   } catch (err) {
-    console.error("❌ Vexon Error:", err.message);
+    console.error("❌ Vexon Error:", err && err.message ? err.message : String(err));
+    if (err && err.stack) console.error(err.stack);
+    process.exit(1);
   }
 }
 
@@ -55,7 +58,8 @@ function compileToExe(filePath, options = {}) {
     const lexer = new Lexer(src);
     const tokens = lexer.lex();
 
-    const parser = new Parser(tokens);
+    // pass src into Parser so compile errors show context
+    const parser = new Parser(tokens, src);
     const stmts = parser.parseProgram();
 
     const compiler = new Compiler();
@@ -65,8 +69,9 @@ function compileToExe(filePath, options = {}) {
 
     console.log("✓ Compiled Vexon bytecode.");
   } catch (err) {
-    console.error("❌ Compile error:", err.message);
-    return;
+    console.error("❌ Compile error:", err && err.message ? err.message : String(err));
+    if (err && err.stack) console.error(err.stack);
+    process.exit(1);
   }
 
   // -------------------------
@@ -85,7 +90,9 @@ const code = ${JSON.stringify(code, null, 2)};
   try {
     await vm.run();
   } catch (err) {
-    console.error("❌ Vexon Runtime Error:", err.message);
+    console.error("❌ Vexon Runtime Error:", err && err.message ? err.message : String(err));
+    if (err && err.stack) console.error(err.stack);
+    process.exit(1);
   }
 })();
 `;
@@ -106,7 +113,9 @@ const code = ${JSON.stringify(code, null, 2)};
     );
     console.log("🎉 EXE created:", outExe);
   } catch (err) {
-    console.error("❌ Failed to build EXE:", err.message);
+    console.error("❌ Failed to build EXE:", err && err.message ? err.message : String(err));
+    if (err && err.stack) console.error(err.stack);
+    process.exit(1);
   }
 }
 
