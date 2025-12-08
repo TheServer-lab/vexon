@@ -1,12 +1,15 @@
 "use strict";
 /*
-  vexon_core.js — Import environment fix + diagnostics + circular JSON avoidance
+  vexon_core.js — HTTP fetch fallback + HALT handling + omitHalt compile option
 
-  - Imported module functions now carry a non-enumerable reference to their module object
-    (so JSON.stringify / toString won't hit a circular reference).
-  - Function frames created for imported functions get a `module` field.
-  - resolveName and STORE respect frame.module so module globals are visible to functions.
-  - Lexer/Parser include token positions and improved error messages for easier debugging.
+  Changes:
+  - Builtin `fetch` now uses global fetch / node-fetch if available,
+    otherwise falls back to an internal http/https implementation.
+    Returns a promise resolving to { status, headers, text, json }.
+  - Op.HALT no longer kills the VM when executed inside non-global frames.
+    It behaves like a RETURN for function frames.
+  - Compiler.compile(stmts, { omitHalt: true }) allows compiling
+    function bodies without emitting a trailing HALT.
 */
 
 const fs = require("fs");
@@ -132,7 +135,7 @@ class Parser {
   constructor(tokens, src = "") {
     this.tokens = tokens;
     this.i = 0;
-    this.src = src;
+    this.src = src || "";
   }
   peek() { return this.tokens[this.i]; }
   next() { return this.tokens[this.i++]; }
@@ -260,18 +263,44 @@ class Parser {
     return { kind: "return", expr: e };
   }
 
+  // Improved parseIf:
+  // - supports `if (cond) stmt` single-statement branches (no braces)
+  // - supports `else if (...)` chaining
+  // - tolerates stray semicolons between clauses
   parseIf() {
-    this.next();
+    this.next(); // consume 'if'
     const cond = this.parseExpr();
-    if (!this.matchSymbol("{")) throw new Error(this.formatTokenError(this.peek(), "if missing {"));
-    const then = [];
-    while (!this.matchSymbol("}")) then.push(this.parseStmt());
-    let otherwise = [];
-    if (this.peek().t === "keyword" && this.peek().v === "else") {
-      this.next();
-      if (!this.matchSymbol("{")) throw new Error(this.formatTokenError(this.peek(), "else missing {"));
-      while (!this.matchSymbol("}")) otherwise.push(this.parseStmt());
+
+    let then = [];
+    // allow either a block or a single stmt
+    if (this.matchSymbol("{")) {
+      while (!this.matchSymbol("}")) then.push(this.parseStmt());
+    } else {
+      // single statement form (e.g. if (x) doSomething();)
+      // consume optional stray semicolons at start
+      while (this.peek().t === "symbol" && this.peek().v === ";") this.next();
+      then.push(this.parseStmt());
     }
+
+    let otherwise = [];
+    // handle optional else (allow else if and else single-stmt forms)
+    if (this.peek().t === "keyword" && this.peek().v === "else") {
+      this.next(); // consume 'else'
+      // tolerate stray semicolons between else and following token
+      while (this.peek().t === "symbol" && this.peek().v === ";") this.next();
+
+      if (this.peek().t === "keyword" && this.peek().v === "if") {
+        // else if (...) { ... }  -> represent as single stmt in otherwise
+        const elifNode = this.parseIf();
+        otherwise.push(elifNode);
+      } else if (this.matchSymbol("{")) {
+        while (!this.matchSymbol("}")) otherwise.push(this.parseStmt());
+      } else {
+        // single-statement else
+        otherwise.push(this.parseStmt());
+      }
+    }
+
     return { kind: "if", cond, then, otherwise };
   }
 
@@ -445,13 +474,15 @@ const Op = {
 
 /* ---------------- Compiler ---------------- */
 class Compiler {
-  constructor() { this.consts = []; this.code = []; this.loopStack = []; }
+  constructor() { this.consts = []; this.code = []; this.loopStack = []; this.omitHalt = false; }
   addConst(v) { const idx = this.consts.indexOf(v); if (idx !== -1) return idx; this.consts.push(v); return this.consts.length - 1; }
   emit(inst) { this.code.push(inst); }
 
-  compile(stmts) {
+  // new signature: compile(stmts, { omitHalt: false })
+  compile(stmts, opts = {}) {
     this.consts = [];
     this.code = [];
+    this.omitHalt = !!opts.omitHalt;
     return this.compileProgram(stmts);
   }
 
@@ -462,7 +493,7 @@ class Compiler {
       if (isLast && s.kind === "expr") this.emitExpr(s.expr);
       else this.emitStmt(s);
     }
-    this.emit({ op: Op.HALT });
+    if (!this.omitHalt) this.emit({ op: Op.HALT });
     return { consts: this.consts, code: this.code };
   }
 
@@ -502,8 +533,9 @@ class Compiler {
         break;
       }
       case "fn": {
+        // compile function body without HALT so that HALT inside functions doesn't terminate whole VM
         const subCompiler = new Compiler();
-        const bytecode = subCompiler.compile(s.body);
+        const bytecode = subCompiler.compile(s.body, { omitHalt: true });
         const funcObj = { params: s.params, code: bytecode.code, consts: bytecode.consts };
         this.emit({ op: Op.CONST, arg: this.addConst(funcObj) });
         this.emit({ op: Op.STORE, arg: this.addConst(s.name) });
@@ -723,6 +755,7 @@ class VM {
     this.globals.set("print", { builtin: true, call: (args) => { console.log(...args.map(a => (a === null ? "null" : a))); return null; } });
     this.globals.set("len", { builtin: true, call: (args) => {
       const v = args[0];
+      if (v === null || v === undefined) return 0;
       if (Array.isArray(v) || typeof v === "string") return v.length;
       if (v && typeof v === "object") return Object.keys(v).length;
       return 0;
@@ -733,8 +766,8 @@ class VM {
       else if (args.length >= 2) { start = args[0]; end = args[1]; }
       const out = []; for (let i = start; i < end; i++) out.push(i); return out;
     }});
-    this.globals.set("push", { builtin: true, call: (args) => { const a = args[0]; a.push(args[1]); return a.length; }});
-    this.globals.set("pop", { builtin: true, call: (args) => { const a = args[0]; return a.pop(); }});
+    this.globals.set("push", { builtin: true, call: (args) => { const a = args[0]; if (!Array.isArray(a)) throw new Error("push expects an array as first argument"); a.push(args[1]); return a.length; }});
+    this.globals.set("pop", { builtin: true, call: (args) => { const a = args[0]; if (!Array.isArray(a)) throw new Error("pop expects an array as first argument"); return a.length ? a.pop() : null; }});
     this.globals.set("input", { builtin: true, call: (args) => {
       const prompt = args.length ? String(args[0]) : "";
       if (readlineSync) return readlineSync.question(prompt);
@@ -755,7 +788,9 @@ class VM {
     }});
     this.globals.set("read", { builtin: true, call: (args) => {
       const p = String(args[0]);
-      return fs.readFileSync(path.resolve(this.baseDir, p), "utf8");
+      const full = path.resolve(this.baseDir, p);
+      if (!fs.existsSync(full)) throw new Error("read: file not found: " + full);
+      return fs.readFileSync(full, "utf8");
     }});
     this.globals.set("write", { builtin: true, call: (args) => {
       const p = String(args[0]); const data = args[1] ?? "";
@@ -799,16 +834,80 @@ class VM {
       if (typeof obj === "object") return JSON.stringify(obj, null, 2);
       return String(obj);
     }});
+
+    // Improved fetch builtin:
+    // Returns a promise that resolves to { status, headers, text, json }
     this.globals.set("fetch", { builtin: true, call: (args) => {
-      if (!fetchImpl) throw new Error("fetch not available in this environment");
       const url = String(args[0]);
       const opts = args[1] || {};
-      return fetchImpl(url, opts).then(res => res.text());
+      // If fetchImpl is available (global fetch or node-fetch), use it:
+      if (fetchImpl) {
+        return fetchImpl(url, opts).then(async res => {
+          const headersObj = {};
+          try {
+            if (res.headers && typeof res.headers.forEach === "function") {
+              res.headers.forEach((v, k) => { headersObj[k] = v; });
+            } else if (res.headers && typeof res.headers === "object") {
+              for (const k of Object.keys(res.headers)) headersObj[k] = res.headers[k];
+            }
+          } catch (e) {}
+          const text = await (res.text ? res.text() : Promise.resolve(String(res)));
+          let parsed = null;
+          try { parsed = JSON.parse(text); } catch (e) {}
+          return { status: res.status || 200, headers: headersObj, text, json: parsed };
+        });
+      }
+
+      // Fallback: use native http/https
+      return new Promise((resolve, reject) => {
+        try {
+          const u = require('url').parse(url);
+          const lib = u.protocol === 'https:' ? require('https') : require('http');
+          const method = (opts.method || 'GET').toUpperCase();
+          const body = opts.body || null;
+          const headers = opts.headers || {};
+          const req = lib.request({
+            hostname: u.hostname,
+            path: u.path || '/',
+            port: u.port || (u.protocol === 'https:' ? 443 : 80),
+            method,
+            headers
+          }, res => {
+            const chunks = [];
+            res.on('data', c => chunks.push(c));
+            res.on('end', () => {
+              const txt = Buffer.concat(chunks).toString('utf8');
+              let j = null;
+              try { j = JSON.parse(txt); } catch (e) {}
+              const hObj = {};
+              try { Object.keys(res.headers).forEach(k => hObj[k] = res.headers[k]); } catch (e) {}
+              resolve({ status: res.statusCode, headers: hObj, text: txt, json: j });
+            });
+          });
+          req.on('error', e => reject(e));
+          if (body) {
+            if (typeof body === "string" || Buffer.isBuffer(body)) req.write(body);
+            else req.write(JSON.stringify(body));
+          }
+          req.end();
+        } catch (e) {
+          reject(e);
+        }
+      });
     }});
   }
 
   push(v) { this.stack.push(v); }
   pop() { return this.stack.pop(); }
+
+  // small helper: coerce numeric-y strings to numbers when both sides are numeric-like
+  tryNumber(x) {
+    if (typeof x === "string") {
+      const s = x.trim();
+      if (s !== "" && !isNaN(Number(s))) return Number(s);
+    }
+    return x;
+  }
 
   // Resolve a name: locals -> module (frame.module) -> globals
   resolveName(frame, name) {
@@ -864,6 +963,7 @@ class VM {
           case Op.LOAD: {
             const name = frame.consts[inst.arg];
             const val = this.resolveName(frame, name);
+            if (this.debug && val === undefined) console.warn(`⚠️ LOAD undefined: ${name} (ip ${frame.ip - 1})`);
             this.push(val);
             break;
           }
@@ -887,27 +987,32 @@ class VM {
           }
           case Op.ADD: {
             const b = this.pop(); const a = this.pop();
-            this.push(a + b);
+            const an = this.tryNumber(a); const bn = this.tryNumber(b);
+            if (typeof an === "number" && typeof bn === "number") {
+              this.push(an + bn);
+            } else {
+              this.push(a + b);
+            }
             break;
           }
           case Op.SUB: {
             const b = this.pop(); const a = this.pop();
-            this.push(a - b);
+            this.push(Number(a) - Number(b));
             break;
           }
           case Op.MUL: {
             const b = this.pop(); const a = this.pop();
-            this.push(a * b);
+            this.push(Number(a) * Number(b));
             break;
           }
           case Op.DIV: {
             const b = this.pop(); const a = this.pop();
-            this.push(a / b);
+            this.push(Number(a) / Number(b));
             break;
           }
           case Op.MOD: {
             const b = this.pop(); const a = this.pop();
-            this.push(a % b);
+            this.push(Number(a) % Number(b));
             break;
           }
           case Op.EQ: {
@@ -1048,7 +1153,6 @@ class VM {
                     configurable: false
                   });
                 } catch (e) {
-                  // If defineProperty fails for any reason, fall back to plain assignment but avoid breaking
                   v.__module = moduleObj;
                 }
               }
@@ -1119,7 +1223,20 @@ class VM {
             break;
           }
           case Op.HALT: {
-            return null;
+            // If HALT executed in the global frame, stop VM.
+            // If HALT is in a non-global frame (e.g. function), act like a RET (pop the frame).
+            if (frame.isGlobal) {
+              return null;
+            } else {
+              // pop current frame and return undefined to caller
+              this.frames.pop();
+              if (this.frames.length > 0) {
+                this.push(undefined);
+                break;
+              } else {
+                return null;
+              }
+            }
           }
           case Op.NOT: {
             const v = this.pop();
