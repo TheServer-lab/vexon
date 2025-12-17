@@ -236,3 +236,5 @@ The compiler, VM, and language design were implemented manually. AI tools were u
 ## Contact / further reading
 
 Issues and technical discussions are welcome via the repository.
+if you wish to contact me visit: https://vexonlang.blogspot.com/
+or send an email at: vexonlang@outlook.com
