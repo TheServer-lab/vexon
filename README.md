@@ -25,19 +25,49 @@ It’s designed to be small and readable, fast to iterate on, and useful for pro
 ## Quick start
 
 **Prerequisites**
-- Node.js (recommended **v16+**)
+- Node.js **v16+** (tested with Node 18)
 - Git
 
-**Clone and run an example**
+**Clone and run**
 ```bash
 git clone <your-repo-url>
 cd vexon
 
 npm install
-node ./bin/vexon.js examples/hello.vx
+node vexon_cli.js run examples/hello.vx
 ```
 
-> Vexon is intended to be run from source using Node.js. No prebuilt executables are required.
+Vexon runs **directly from source using Node.js**. No executables are required.
+
+---
+
+## CLI usage
+
+Vexon ships with a small Node.js CLI:
+
+```bash
+node vexon_cli.js run <file.vx> [--debug]
+node vexon_cli.js compile <file.vx> [--debug]
+```
+
+### Commands
+
+**Run**
+```bash
+node vexon_cli.js run program.vx
+```
+- Lexes, parses, compiles, and executes the program on the Vexon VM
+- `--debug` prints bytecode execution steps
+
+**Compile (optional)**
+```bash
+node vexon_cli.js compile program.vx
+```
+- Compiles `.vx` to Vexon bytecode
+- Generates a JS runner and (optionally) a Windows `.exe` using `pkg`
+- This is **optional** and not required to use the language
+
+> For safety and transparency, running from source is the recommended path.
 
 ---
 
@@ -113,6 +143,16 @@ Optional flags may include:
 
 ```text
 /bin
+  vexon_cli.js        # CLI entry point
+/src
+  vexon_core.js       # Lexer, parser, compiler, VM
+/examples
+  hello.vx
+LICENSE
+README.md
+package.json
+```text
+/bin
   vexon.js
 /src
   lexer.js
@@ -131,21 +171,22 @@ package.json
 
 ## Design notes & implementation details
 
-**Goals**
+**Compiler pipeline**
+- Hand-written lexer with line/column tracking
+- Pratt parser with operator precedence
+- AST → bytecode compiler
+- Stack-based virtual machine
+
+**VM highlights**
+- Separate call frames with local scopes
+- Safe `HALT` handling (functions do not terminate the VM)
+- Import system with module caching
+- Built-in exception handling (`try` / `catch` / `throw`)
+
+**Design philosophy**
 - Minimal syntax
-- Clear compiler pipeline
-- Fast edit → run loop
-
-**Architecture**
-- Hand-written lexer
-- Pratt parser
-- Bytecode compiler
-- Stack-based VM
-
-**Limitations**
-- Experimental
-- Limited tooling
-- Diagnostics are evolving
+- Explicit control flow
+- Small, readable implementation intended for learning and experimentation
 
 ---
 
@@ -173,21 +214,25 @@ expression     ::= assignment
 
 ## License
 
-Apache-2.0 license. See `LICENSE` for details.
+This project is licensed under the **Apache License 2.0**. See the `LICENSE` file for the full terms and attribution (SPDX identifier: `Apache-2.0`).
 
 ---
 
-## Security & trust
+## Security &
 
-- No prebuilt executables
-- Run from source
-- Review code before execution
+- Vexon can be run entirely from source via Node.js
+- No executables are required or trusted by default
+- Generated executables (via `pkg`) are optional and user-initiated
+- The compiler, VM, and runtime are fully contained in `vexon_core.js`
+
+---
+
+## AI / authorship note
+
+The compiler, VM, and language design were implemented manually. AI tools were used occasionally for **documentation wording and minor refactoring suggestions**, but the architecture, bytecode format, parser, and VM logic were written and debugged by hand.
 
 ---
 
 ## Contact / further reading
 
-Open an issue or discussion for questions about the implementation.
-
-*Thanks for checking out Vexon.*
-
+Issues and technical discussions are welcome via the repository.
