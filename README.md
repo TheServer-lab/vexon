@@ -214,7 +214,7 @@ expression     ::= assignment
 
 ## License
 
-This project is licensed under the **Vexon Open-Control License (VOCL) 1.0**. See the `LICENSE` file for the full terms and attribution (SPDX identifier: `Apache-2.0`).
+This project is licensed under the **Vexon Open-Control License (VOCL) 1.0**. See the `LICENSE` file for the full terms and attribution.
 
 ---
 
