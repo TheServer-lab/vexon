@@ -1,15 +1,9 @@
 "use strict";
 /*
   vexon_core.js — HTTP fetch fallback + HALT handling + omitHalt compile option
-
-  Changes:
-  - Builtin `fetch` now uses global fetch / node-fetch if available,
-    otherwise falls back to an internal http/https implementation.
-    Returns a promise resolving to { status, headers, text, json }.
-  - Op.HALT no longer kills the VM when executed inside non-global frames.
-    It behaves like a RETURN for function frames.
-  - Compiler.compile(stmts, { omitHalt: true }) allows compiling
-    function bodies without emitting a trailing HALT.
+  + additional builtins: sleep, setTimeout, setInterval, clearTimeout, clearInterval,
+    assert, typeOf, inspect
+  + safer CALL diagnostics, improved exception unwinding, instruction watchdog
 */
 
 const fs = require("fs");
@@ -748,10 +742,19 @@ class VM {
     this.baseDir = options.baseDir || process.cwd();
     this.debug = !!options.debug;
 
+    // timers (for setTimeout/setInterval) -> id -> {timer, type}
+    this._timers = new Map();
+
+    // VM watchdog
+    this.ticks = 0;
+    this.maxTicks = options.maxTicks || 5_000_000;
+
     this.setupBuiltins();
   }
 
   setupBuiltins() {
+    const self = this;
+
     this.globals.set("print", { builtin: true, call: (args) => { console.log(...args.map(a => (a === null ? "null" : a))); return null; } });
     this.globals.set("len", { builtin: true, call: (args) => {
       const v = args[0];
@@ -895,6 +898,114 @@ class VM {
         }
       });
     }});
+
+    // ---------------- Additional builtins ----------------
+
+    // sleep(ms) -> returns Promise that resolves after ms
+    this.globals.set("sleep", { builtin: true, call: (args) => {
+      const ms = Number(args[0] || 0);
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }});
+
+    // setTimeout(fn, ms) -> schedules a Vexon function (or JS function) to run once
+    this.globals.set("setTimeout", { builtin: true, call: (args) => {
+      const fn = args[0];
+      const ms = Number(args[1] || 0);
+      const id = Date.now().toString(36) + "-" + Math.floor(Math.random() * 1e9);
+      const timer = setTimeout(async () => {
+        try {
+          if (fn && fn.code && Array.isArray(fn.code)) {
+            // push function frame and run VM
+            const funcFrame = {
+              code: fn.code,
+              consts: fn.consts,
+              ip: 0,
+              locals: new Map(),
+              baseDir: this.baseDir,
+              isGlobal: false,
+              tryStack: [],
+              module: fn.__module || null
+            };
+            this.frames.push(funcFrame);
+            await this.run();
+          } else if (typeof fn === "function") {
+            const res = fn();
+            if (res && typeof res.then === "function") await res;
+          }
+        } catch (e) {
+          console.error("setTimeout callback error:", e);
+        } finally {
+          this._timers.delete(id);
+        }
+      }, ms);
+      this._timers.set(id, { timer, type: "timeout" });
+      return id;
+    }});
+
+    // setInterval(fn, ms) -> schedules a repeating function
+    this.globals.set("setInterval", { builtin: true, call: (args) => {
+      const fn = args[0];
+      const ms = Number(args[1] || 0);
+      const id = Date.now().toString(36) + "-" + Math.floor(Math.random() * 1e9);
+      const timer = setInterval(async () => {
+        try {
+          if (fn && fn.code && Array.isArray(fn.code)) {
+            const funcFrame = {
+              code: fn.code,
+              consts: fn.consts,
+              ip: 0,
+              locals: new Map(),
+              baseDir: this.baseDir,
+              isGlobal: false,
+              tryStack: [],
+              module: fn.__module || null
+            };
+            this.frames.push(funcFrame);
+            await this.run();
+          } else if (typeof fn === "function") {
+            const res = fn();
+            if (res && typeof res.then === "function") await res;
+          }
+        } catch (e) {
+          console.error("setInterval callback error:", e);
+        }
+      }, ms);
+      this._timers.set(id, { timer, type: "interval" });
+      return id;
+    }});
+
+    // clearTimeout / clearInterval
+    this.globals.set("clearTimeout", { builtin: true, call: (args) => {
+      const id = args[0];
+      if (!id) return null;
+      const rec = this._timers.get(String(id));
+      if (!rec) return null;
+      if (rec.type === "timeout") clearTimeout(rec.timer);
+      else if (rec.type === "interval") clearInterval(rec.timer);
+      this._timers.delete(String(id));
+      return null;
+    }});
+    this.globals.set("clearInterval", this.globals.get("clearTimeout"));
+
+    // assert(condition, message)
+    this.globals.set("assert", { builtin: true, call: (args) => {
+      const cond = args[0];
+      if (!cond) throw new Error(args.length > 1 ? String(args[1]) : "assertion failed");
+      return null;
+    }});
+
+    // typeOf(x)
+    this.globals.set("typeOf", { builtin: true, call: (args) => {
+      const v = args[0];
+      if (v === null) return "null";
+      if (Array.isArray(v)) return "array";
+      return typeof v;
+    }});
+
+    // inspect -> JSON-friendly representation
+    this.globals.set("inspect", { builtin: true, call: (args) => {
+      try { return JSON.stringify(args[0], null, 2); } catch (e) { return String(args[0]); }
+    }});
   }
 
   push(v) { this.stack.push(v); }
@@ -942,7 +1053,9 @@ class VM {
       tryStack: [],
       module: null
     };
-    this.frames.push(globalFrame);
+
+    // If no frames currently running, start with globalFrame
+    if (this.frames.length === 0) this.frames.push(globalFrame);
 
     while (this.frames.length > 0) {
       const frame = this.frames[this.frames.length - 1];
@@ -954,6 +1067,11 @@ class VM {
       const inst = code[frame.ip++];
       if (this.debug) console.log("IP", frame.ip - 1, inst.op, inst.arg ?? "");
       try {
+        // Watchdog tick
+        if (++this.ticks > this.maxTicks) {
+          throw new Error("VM halted: instruction limit exceeded (possible infinite loop)");
+        }
+
         switch (inst.op) {
           case Op.CONST: {
             const v = frame.consts[inst.arg];
@@ -1167,7 +1285,10 @@ class VM {
             const args = [];
             for (let i = 0; i < argc; i++) args.unshift(this.pop());
             const callee = this.pop();
-            if (callee === undefined) throw new Error("Call of undefined");
+            if (this.debug) console.log("CALL target =", callee);
+
+            if (callee === undefined || callee === null) throw new Error("Call of undefined or null");
+
             // Builtin
             if (callee && callee.builtin && typeof callee.call === "function") {
               const res = callee.call(args);
@@ -1210,7 +1331,7 @@ class VM {
               }
               break;
             }
-            throw new Error("Unsupported call target");
+            throw new Error("Unsupported call target: " + String(callee));
           }
           case Op.RET: {
             const retVal = this.stack.length ? this.pop() : undefined;
@@ -1280,6 +1401,7 @@ class VM {
       } catch (err) {
         const exObj = { message: err.message || String(err), _native: err };
         let handled = false;
+
         while (this.frames.length > 0) {
           const cur = this.frames[this.frames.length - 1];
           if (cur.tryStack && cur.tryStack.length > 0) {
@@ -1293,7 +1415,9 @@ class VM {
             this.frames.pop();
           }
         }
+
         if (!handled) {
+          console.error("❌ Vexon Runtime Error:", exObj.message);
           throw err;
         }
       }
