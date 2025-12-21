@@ -1,17 +1,47 @@
 # Vexon Language Requirements
 # ---------------------------
-# Install using:
-#     npm install
-# Or manually install packages listed below.
-Node.js
+# Install Node.js (recommended LTS)
+# Initialize project (if you haven't):
+#    npm init -y
+#
+# Install all dependencies with the commands below (recommended).
+#
+# Note: Electron and electron-builder are developer/dev-dependency tools
+# used for GUI runs and EXE packaging. pkg is optional and used to create
+# native runners for non-GUI programs.
 
-# Required packages for Vexon CLI
+# ---------------------------
+# Core / runtime helpers
 colors
 prompt-sync
+readline-sync
+node-fetch
 
-# Required for building Windows EXE files
+# ---------------------------
+# Packaging / build tools
 pkg
+electron
+electron-builder
 
-# Optional developer tools (recommended)
+# ---------------------------
+# Dev / convenience tools (optional but recommended)
 nodemon
 
+# ---------------------------
+# How to install (example)
+# 1) Create package.json if missing:
+#      npm init -y
+#
+# 2) Install runtime/help packages:
+#      npm install colors prompt-sync readline-sync node-fetch pkg nodemon
+#
+# 3) Install Electron + builder as dev dependencies:
+#      npm install --save-dev electron electron-builder
+#
+# After installation:
+#  - Use `node vexon_cli.js run <file.vx>` to run non-GUI programs.
+#  - Use `node vexon_cli.js run <file.vx>` to run GUI programs (CLI will spawn Electron).
+#  - Use `node vexon_cli.js compile <file.vx>` to build EXEs (requires electron-builder / pkg).
+#
+# If you prefer a single command (installs everything as regular deps/dev-deps):
+#    npm init -y && npm install colors prompt-sync readline-sync node-fetch pkg nodemon && npm install --save-dev electron electron-builder
