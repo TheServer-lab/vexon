@@ -1716,6 +1716,7 @@ function createGuiBuiltin(vm) {
       _id: id,
       _type: "canvas",
       clear() { const s = widgets.get(id); s.ops = []; s.dirty = true; vm.__sendUI({ type: "noop" }, widgets); },
+      clearRect(x, y, wi, he) { const s = widgets.get(id); s.ops.push(["clearRect", x, y, wi, he]); s.dirty = true; vm.__sendUI({ type: "noop" }, widgets); },
       drawRect(x, y, wi, he, color) { const s = widgets.get(id); s.ops.push(["rect", x, y, wi, he, color]); s.dirty = true; vm.__sendUI({ type: "noop" }, widgets); },
       drawCircle(x, y, r, color) { const s = widgets.get(id); s.ops.push(["circle", x, y, r, color]); s.dirty = true; vm.__sendUI({ type: "noop" }, widgets); },
       drawText(x, y, text, color) { const s = widgets.get(id); s.ops.push(["text", x, y, text, color]); s.dirty = true; vm.__sendUI({ type: "noop" }, widgets); },
@@ -1723,6 +1724,24 @@ function createGuiBuiltin(vm) {
         const s = widgets.get(id);
         if (!imgObj || !imgObj._id) return;
         s.ops.push(["image", imgObj._id, x, y, wi === undefined ? null : wi, he === undefined ? null : he]);
+        s.dirty = true;
+        vm.__sendUI({ type: "noop" }, widgets);
+      },
+      drawLine(x1, y1, x2, y2, color, width) {
+        const s = widgets.get(id);
+        s.ops.push(["line", x1, y1, x2, y2, color === undefined ? "black" : color, width === undefined ? 1 : width]);
+        s.dirty = true;
+        vm.__sendUI({ type: "noop" }, widgets);
+      },
+      drawTriangle(x1, y1, x2, y2, x3, y3, color) {
+        const s = widgets.get(id);
+        s.ops.push(["triangle", x1, y1, x2, y2, x3, y3, color === undefined ? "black" : color]);
+        s.dirty = true;
+        vm.__sendUI({ type: "noop" }, widgets);
+      },
+      drawArc(x, y, r, start, end, color) {
+        const s = widgets.get(id);
+        s.ops.push(["arc", x, y, r, start, end, color === undefined ? "black" : color]);
         s.dirty = true;
         vm.__sendUI({ type: "noop" }, widgets);
       },
