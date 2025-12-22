@@ -253,6 +253,28 @@ function renderNode(ids, parent) {
               if (op[4] == null) ctx.drawImage(im, op[2], op[3]);
               else ctx.drawImage(im, op[2], op[3], op[4], op[5]);
             }
+          } else if (op[0] === "line") {
+            ctx.strokeStyle = op[5] || "black";
+            ctx.lineWidth = op[6] || 1;
+            ctx.beginPath();
+            ctx.moveTo(op[1], op[2]);
+            ctx.lineTo(op[3], op[4]);
+            ctx.stroke();
+          } else if (op[0] === "triangle") {
+            ctx.fillStyle = op[7] || "black";
+            ctx.beginPath();
+            ctx.moveTo(op[1], op[2]);
+            ctx.lineTo(op[3], op[4]);
+            ctx.lineTo(op[5], op[6]);
+            ctx.closePath();
+            ctx.fill();
+          } else if (op[0] === "arc") {
+            ctx.fillStyle = op[6] || "black";
+            ctx.beginPath();
+            ctx.arc(op[1], op[2], op[3], op[4], op[5]);
+            ctx.fill();
+          } else if (op[0] === "clearRect") {
+            ctx.clearRect(op[1], op[2], op[3], op[4]);
           }
         }
       }
@@ -272,6 +294,9 @@ function applyStyle(el, style) {
 }
 
 ipcRenderer.on("frame", () => {});
+// global key events -> forward to main
+window.addEventListener("keydown", (e) => { try { ipcRenderer.send("key", "keydown", e.key); } catch (err) {} });
+window.addEventListener("keyup", (e) => { try { ipcRenderer.send("key", "keyup", e.key); } catch (err) {} });
 `;
   fs.writeFileSync(path.join(buildDir, "renderer.js"), rendererJs, "utf8");
 
@@ -362,8 +387,7 @@ async function runElectronRuntime(filePath) {
   }
 
   // Tiny inline renderer HTML — listens for "render" and sends events back.
-  const html = `<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;background:#111;color:#fff;font-family:Segoe UI,Arial,Helvetica,sans-serif;"><div id="root" style="padding:8px;"></div><script>
-(function(){
+  const html = `<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;background:#111;color:#fff;font-family:Segoe UI,Arial,Helvetica,sans-serif;"><div id="root" style="padding:10px;"></div><script>(function(){
   const { ipcRenderer } = require('electron');
   let WIDGETS = {};
   ipcRenderer.on('render', (e, payload) => {
@@ -406,6 +430,7 @@ async function runElectronRuntime(filePath) {
       } else if (w.type === 'canvas') {
         const c = document.createElement('canvas');
         c.width = w.width || 300; c.height = w.height || 150;
+        c.style.border = '1px solid #222';
         if (w.style) Object.assign(c.style, w.style);
         parent.appendChild(c);
         const ctx = c.getContext('2d');
@@ -438,17 +463,45 @@ async function runElectronRuntime(filePath) {
                 if (op[4] == null) ctx.drawImage(im, op[2], op[3]);
                 else ctx.drawImage(im, op[2], op[3], op[4], op[5]);
               }
+            } else if (op[0] === 'line') {
+              ctx.strokeStyle = op[5] || 'black';
+              ctx.lineWidth = op[6] || 1;
+              ctx.beginPath();
+              ctx.moveTo(op[1], op[2]);
+              ctx.lineTo(op[3], op[4]);
+              ctx.stroke();
+            } else if (op[0] === 'triangle') {
+              ctx.fillStyle = op[7] || 'black';
+              ctx.beginPath();
+              ctx.moveTo(op[1], op[2]);
+              ctx.lineTo(op[3], op[4]);
+              ctx.lineTo(op[5], op[6]);
+              ctx.closePath();
+              ctx.fill();
+            } else if (op[0] === 'arc') {
+              ctx.fillStyle = op[6] || 'black';
+              ctx.beginPath();
+              ctx.arc(op[1], op[2], op[3], op[4], op[5]);
+              ctx.fill();
+            } else if (op[0] === 'clearRect') {
+              ctx.clearRect(op[1], op[2], op[3], op[4]);
             }
           }
         }
         c.onmousedown = e => ipcRenderer.send('mouse', id, 'mousedown', e.offsetX, e.offsetY);
         c.onmousemove = e => ipcRenderer.send('mouse', id, 'mousemove', e.offsetX, e.offsetY);
         c.onmouseup = e => ipcRenderer.send('mouse', id, 'mouseup', e.offsetX, e.offsetY);
+      } else if (w.type === 'image') {
+        // invisible: images are referenced by canvas drawImage
       }
     }
   }
-})();
-</script></body></html>`;
+
+  // forward key events to main so vm.__dispatchGlobalKey receives them
+  window.addEventListener('keydown', (e) => { try { ipcRenderer.send('key', 'keydown', e.key); } catch (err) {} });
+  window.addEventListener('keyup', (e) => { try { ipcRenderer.send('key', 'keyup', e.key); } catch (err) {} });
+
+})();</script></body></html>`;
 
   // Create window after app ready
   app.whenReady().then(() => {
