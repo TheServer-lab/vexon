@@ -98,7 +98,7 @@ Ways you can help:
 If you discover a security vulnerability, **please do not open a public issue**.
 
 Instead, see:
-- [`SECURITY.md`](SECURITY.md)
+- [`SECURITY.md`](security.md)
 
 and report it privately via email.
 
