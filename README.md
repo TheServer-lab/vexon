@@ -82,8 +82,8 @@ Contributions are welcome and encouraged.
 
 Before contributing, please read:
 
-- [`CONTRIBUTING.md`](CONTRIBUTING.md)
-- [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)
+- [`CONTRIBUTING.md`](contributing.md)
+- [`CODE_OF_CONDUCT.md`](code_of_conduct.md)
 
 Ways you can help:
 - Improve the language syntax or runtime
