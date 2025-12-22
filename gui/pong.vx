@@ -1,0 +1,234 @@
+// pong.vx - Simple Pong implemented in Vexon using the GUI builtin.
+// Run with: node vexon_cli.js run pong.vx
+
+use gui
+
+// Create window and canvas
+let W = 800;
+let H = 600;
+let win = Window("Pong", W, H);
+let cvs = Canvas(W, H);
+win.add(cvs);
+win.show();
+
+// Game parameters
+let P_WIDTH = 12;
+let P_HEIGHT = 120;
+let P_SPEED = 6;
+let BALL_R = 8;
+
+let leftY = (H - P_HEIGHT) / 2;
+let rightY = (H - P_HEIGHT) / 2;
+
+let upLeft = false;
+let downLeft = false;
+let upRight = false;
+let downRight = false;
+
+let draggingLeft = false;
+let draggingRight = false;
+
+let bx = W / 2;
+let by = H / 2;
+let bvx = 4;
+let bvy = 2;
+
+let scoreL = 0;
+let scoreR = 0;
+let paused = false;
+
+// Helper: clamp
+fn clamp(v, a, b) {
+  if (v < a) return a;
+  if (v > b) return b;
+  return v;
+}
+
+// Reset ball to center, send towards `dir` ("left" or "right")
+fn resetBall(dir) {
+  bx = W / 2;
+  by = H / 2;
+  let speed = 4;
+  bvy = (random() * 4) - 2;
+  if (dir == "left") bvx = -speed;
+  else bvx = speed;
+}
+
+// Robust key match: compare against common variants without using ternary/typeof
+fn isKeyEqual(k, a) {
+  if (k === null || k === undefined) return false;
+  if (k == a) return true;
+
+  // uppercase variant for single-letter keys
+  let upper = a;
+  // safe: a is always a string constant in our uses
+  try { upper = a.toUpperCase(); } catch (e) { upper = a; }
+  if (k == upper) return true;
+
+  // Arrow names: accept multiple common forms
+  if (a == "arrowup") {
+    if (k == "ArrowUp") return true;
+    if (k == "arrowup") return true;
+    if (k == "up") return true;
+    if (k == "Up") return true;
+  }
+  if (a == "arrowdown") {
+    if (k == "ArrowDown") return true;
+    if (k == "arrowdown") return true;
+    if (k == "down") return true;
+    if (k == "Down") return true;
+  }
+  // Space variants
+  if (a == " ") {
+    if (k == " ") return true;
+    if (k == "Space") return true;
+    if (k == "space") return true;
+    if (k == "spacebar") return true;
+  }
+
+  return false;
+}
+
+// Key handlers (named) using simple comparisons
+fn onKeyDown(key) {
+  if (isKeyEqual(key, "w")) upLeft = true;
+  if (isKeyEqual(key, "s")) downLeft = true;
+  if (isKeyEqual(key, "arrowup")) upRight = true;
+  if (isKeyEqual(key, "arrowdown")) downRight = true;
+  if (isKeyEqual(key, " ")) paused = !paused;
+}
+fn onKeyUp(key) {
+  if (isKeyEqual(key, "w")) upLeft = false;
+  if (isKeyEqual(key, "s")) downLeft = false;
+  if (isKeyEqual(key, "arrowup")) upRight = false;
+  if (isKeyEqual(key, "arrowdown")) downRight = false;
+}
+
+// Canvas mouse handlers for click+drag control
+fn onCanvasMouseDown(x, y) {
+  if (x < W / 2) {
+    draggingLeft = true;
+    leftY = clamp(y - P_HEIGHT/2, 0, H - P_HEIGHT);
+  } else {
+    draggingRight = true;
+    rightY = clamp(y - P_HEIGHT/2, 0, H - P_HEIGHT);
+  }
+  render();
+}
+fn onCanvasMouseMove(x, y) {
+  if (draggingLeft) {
+    leftY = clamp(y - P_HEIGHT/2, 0, H - P_HEIGHT);
+    render();
+  } else if (draggingRight) {
+    rightY = clamp(y - P_HEIGHT/2, 0, H - P_HEIGHT);
+    render();
+  }
+}
+fn onCanvasMouseUp(x, y) {
+  draggingLeft = false;
+  draggingRight = false;
+}
+
+// Hook handlers
+win.on("keydown", onKeyDown);
+win.on("keyup", onKeyUp);
+cvs.on("mousedown", onCanvasMouseDown);
+cvs.on("mousemove", onCanvasMouseMove);
+cvs.on("mouseup", onCanvasMouseUp);
+
+// Draw current frame
+fn render() {
+  cvs.clear();
+  cvs.drawRect(0, 0, W, H, "#000");
+
+  let seg = 20;
+  let gap = 10;
+  let xmid = W / 2;
+  let y = 0;
+  while (y < H) {
+    cvs.drawRect(xmid - 1, y, 2, seg, "#444");
+    y = y + seg + gap;
+  }
+
+  cvs.drawRect(10, leftY, P_WIDTH, P_HEIGHT, "#fff");
+  cvs.drawRect(W - 10 - P_WIDTH, rightY, P_WIDTH, P_HEIGHT, "#fff");
+
+  cvs.drawCircle(bx, by, BALL_R, "#fff");
+
+  cvs.drawText(W/2 - 150, 60, toString(scoreL), "#fff");
+  cvs.drawText(W/2 + 120, 60, toString(scoreR), "#fff");
+
+  if (paused) {
+    cvs.drawText(W/2 - 40, H/2, "PAUSED", "#fff");
+  }
+
+  // send full UI so renderer updates
+  win.show();
+}
+
+// Single physics / update tick
+fn tick() {
+  if (paused) {
+    render();
+    return;
+  }
+
+  if (upLeft) leftY = leftY - P_SPEED;
+  if (downLeft) leftY = leftY + P_SPEED;
+  if (upRight) rightY = rightY - P_SPEED;
+  if (downRight) rightY = rightY + P_SPEED;
+
+  leftY = clamp(leftY, 0, H - P_HEIGHT);
+  rightY = clamp(rightY, 0, H - P_HEIGHT);
+
+  bx = bx + bvx;
+  by = by + bvy;
+
+  if (by - BALL_R <= 0) {
+    by = BALL_R;
+    bvy = -bvy;
+  }
+  if (by + BALL_R >= H) {
+    by = H - BALL_R;
+    bvy = -bvy;
+  }
+
+  let leftPaddleX = 10 + P_WIDTH;
+  if (bx - BALL_R <= leftPaddleX) {
+    if (by >= leftY && by <= leftY + P_HEIGHT) {
+      bx = leftPaddleX + BALL_R;
+      bvx = -bvx * 1.05;
+      let rel = (by - (leftY + P_HEIGHT / 2)) / (P_HEIGHT / 2);
+      bvy = bvy + rel * 2;
+    }
+  }
+
+  let rightPaddleX = W - 10 - P_WIDTH;
+  if (bx + BALL_R >= rightPaddleX) {
+    if (by >= rightY && by <= rightY + P_HEIGHT) {
+      bx = rightPaddleX - BALL_R;
+      bvx = -bvx * 1.05;
+      let rel = (by - (rightY + P_HEIGHT / 2)) / (P_HEIGHT / 2);
+      bvy = bvy + rel * 2;
+    }
+  }
+
+  if (bx + BALL_R < 0) {
+    scoreR = scoreR + 1;
+    resetBall("right");
+  } else if (bx - BALL_R > W) {
+    scoreL = scoreL + 1;
+    resetBall("left");
+  }
+
+  render();
+}
+
+// Start game
+resetBall("right");
+render();
+setInterval(tick, 16);
+
+// keep main frame alive
+fn main() { }
+main();

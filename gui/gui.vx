@@ -1,0 +1,85 @@
+use gui
+
+// 1. Global State
+let win = null
+let statusLabel = null
+let clickCount = 0
+
+// 2. Event Handlers (Named functions)
+fn onButtonClick() {
+    clickCount = clickCount + 1
+    statusLabel.setText("System Pulse: " + toString(clickCount))
+    print("User clicked the primary button.")
+}
+
+fn onExit() {
+    print("Shutting down...")
+    // In Vexon, stopping the loop or closing the window exits
+}
+
+// 3. Main GUI Construction
+fn main() {
+    win = Window("Vexon Command Center", 700, 450)
+    
+    // Main Container (Vertical)
+    let root = VBox()
+    root.setStyle({ 
+        backgroundColor: "#121212", 
+        padding: "20px",
+        height: "100%" 
+    })
+    
+    // Header Section
+    let header = HBox()
+    header.setStyle({ marginBottom: "20px", borderBottom: "1px solid #333" })
+    
+    let title = Label("VEXON 0.4.1")
+    title.setStyle({ color: "#00ffcc", fontSize: "24px", fontWeight: "bold" })
+    header.add(title)
+    root.add(header)
+    
+    // Content Area
+    let content = HBox()
+    content.setStyle({ gap: "15px" })
+    
+    // Sidebar
+    let sidebar = VBox()
+    sidebar.setStyle({ width: "150px", gap: "10px" })
+    
+    let btn1 = Button("Analyze")
+    let btn2 = Button("Deploy")
+    sidebar.add(btn1)
+    sidebar.add(btn2)
+    content.add(sidebar)
+    
+    // Main Display Area
+    let display = VBox()
+    display.setStyle({ 
+        backgroundColor: "#1e1e1e", 
+        padding: "15px", 
+        borderRadius: "8px",
+        width: "100%"
+    })
+    
+    statusLabel = Label("System Ready")
+    statusLabel.setStyle({ color: "white", fontSize: "16px" })
+    display.add(statusLabel)
+    
+    let actionBtn = Button("Trigger Pulse")
+    actionBtn.on("click", onButtonClick)
+    display.add(actionBtn)
+    
+    content.add(display)
+    root.add(content)
+    
+    win.add(root)
+    win.show()
+}
+
+// Start the application
+main()
+
+// Keep process alive for events
+while(true) {
+    sleep(100) 
+}

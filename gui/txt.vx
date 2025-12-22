@@ -1,0 +1,92 @@
+use gui
+
+// 1. Global State
+let editor = null
+let status = null
+let win = null
+let currentText = ""
+
+// 2. This updates the variable SILENTLY while you type
+fn onEditorChange(text) {
+    currentText = text
+}
+
+// 3. Save Logic
+fn onSave() {
+    write("note.txt", currentText)
+    status.setText("💾 Saved to note.txt")
+    win.show() // Refresh UI to show the new status
+}
+
+// 4. Load Logic
+fn onLoad() {
+    if (exists("note.txt")) {
+        currentText = read("note.txt")
+        editor.setText(currentText)
+        status.setText("📂 Loaded note.txt")
+    } else {
+        status.setText("❌ File not found")
+    }
+    win.show() // Refresh UI to show the loaded text
+}
+
+// 5. Initial Startup
+fn start() {
+    // Attempt an initial load so the user sees their last work
+    if (exists("note.txt")) {
+        currentText = read("note.txt")
+        editor.setText(currentText)
+        status.setText("Welcome back")
+    }
+    win.show()
+}
+
+fn main() {
+    win = Window("Vexon Editor Pro", 600, 450)
+    
+    let root = VBox()
+    root.setStyle({ backgroundColor: "#1e1e1e", padding: "15px", height: "100%" })
+    
+    // Header
+    let title = Label("Vexon Text Editor")
+    title.setStyle({ color: "white", fontSize: "18px", padding: "5px" })
+    root.add(title)
+    
+    // Editor Area
+    editor = TextBox()
+    editor.setStyle({ 
+        height: "280px", 
+        width: "100%", 
+        backgroundColor: "#2d2d2d", 
+        color: "#ffffff", 
+        fontSize: "16px" 
+    })
+    editor.on("change", onEditorChange)
+    root.add(editor)
+    
+    // Buttons Row
+    let toolbar = HBox()
+    toolbar.setStyle({ padding: "10px 0", gap: "10px" })
+    
+    let btnSave = Button("Save")
+    btnSave.on("click", onSave)
+    
+    let btnLoad = Button("Load")
+    btnLoad.on("click", onLoad)
+    
+    toolbar.add(btnSave)
+    toolbar.add(btnLoad)
+    root.add(toolbar)
+    
+    // Status Bar
+    status = Label("Ready")
+    status.setStyle({ color: "#888" })
+    root.add(status)
+    
+    win.add(root)
+    
+    // Final Step: Start with a delay
+    setTimeout(start, 250)
+}
+
+main()
