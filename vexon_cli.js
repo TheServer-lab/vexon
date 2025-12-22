@@ -294,9 +294,21 @@ function applyStyle(el, style) {
 }
 
 ipcRenderer.on("frame", () => {});
-// global key events -> forward to main
-window.addEventListener("keydown", (e) => { try { ipcRenderer.send("key", "keydown", e.key); } catch (err) {} });
-window.addEventListener("keyup", (e) => { try { ipcRenderer.send("key", "keyup", e.key); } catch (err) {} });
+// global key events -> forward to main with a canonical (lowercased) key argument
+window.addEventListener("keydown", (e) => {
+  try {
+    const raw = e.key;
+    const canon = (raw && raw.toLowerCase) ? raw.toLowerCase() : String(raw || "").toLowerCase();
+    ipcRenderer.send("key", "keydown", raw, canon);
+  } catch (err) {}
+});
+window.addEventListener("keyup", (e) => {
+  try {
+    const raw = e.key;
+    const canon = (raw && raw.toLowerCase) ? raw.toLowerCase() : String(raw || "").toLowerCase();
+    ipcRenderer.send("key", "keyup", raw, canon);
+  } catch (err) {}
+});
 `;
   fs.writeFileSync(path.join(buildDir, "renderer.js"), rendererJs, "utf8");
 
@@ -333,9 +345,10 @@ function createWindow() {
     } catch (ex) { console.error("ipc mouse dispatch error", ex); }
   });
 
-  ipcMain.on("key", (e, type, key) => {
+  ipcMain.on("key", (e, type, key, canon) => {
     try {
-      if (vm && typeof vm.__dispatchGlobalKey === "function") vm.__dispatchGlobalKey(type, key);
+      const k = (canon && canon !== "") ? canon : key;
+      if (vm && typeof vm.__dispatchGlobalKey === "function") vm.__dispatchGlobalKey(type, k);
     } catch (ex) { console.error("ipc key dispatch error", ex); }
   });
 
@@ -498,8 +511,20 @@ async function runElectronRuntime(filePath) {
   }
 
   // forward key events to main so vm.__dispatchGlobalKey receives them
-  window.addEventListener('keydown', (e) => { try { ipcRenderer.send('key', 'keydown', e.key); } catch (err) {} });
-  window.addEventListener('keyup', (e) => { try { ipcRenderer.send('key', 'keyup', e.key); } catch (err) {} });
+  window.addEventListener('keydown', (e) => {
+    try {
+      const raw = e.key;
+      const canon = (raw && raw.toLowerCase) ? raw.toLowerCase() : String(raw || "").toLowerCase();
+      ipcRenderer.send('key', 'keydown', raw, canon);
+    } catch (err) {}
+  });
+  window.addEventListener('keyup', (e) => {
+    try {
+      const raw = e.key;
+      const canon = (raw && raw.toLowerCase) ? raw.toLowerCase() : String(raw || "").toLowerCase();
+      ipcRenderer.send('key', 'keyup', raw, canon);
+    } catch (err) {}
+  });
 
 })();</script></body></html>`;
 
@@ -536,8 +561,8 @@ async function runElectronRuntime(filePath) {
       ipcMain.on("mouse", (e, id, ev, x, y) => {
         try { if (vm && typeof vm.__dispatchEvent === "function") vm.__dispatchEvent(id, ev, x, y); } catch (ex) { console.error("ipc mouse dispatch error", ex); }
       });
-      ipcMain.on("key", (e, type, key) => {
-        try { if (vm && typeof vm.__dispatchGlobalKey === "function") vm.__dispatchGlobalKey(type, key); } catch (ex) { console.error("ipc key dispatch error", ex); }
+      ipcMain.on("key", (e, type, key, canon) => {
+        try { const k = (canon && canon !== "") ? canon : key; if (vm && typeof vm.__dispatchGlobalKey === "function") vm.__dispatchGlobalKey(type, k); } catch (ex) { console.error("ipc key dispatch error", ex); }
       });
 
       // Run the VM (async)
