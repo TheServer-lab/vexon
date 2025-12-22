@@ -158,4 +158,5 @@ Thank you for your interest in Vexon. Whether you contribute code, documentation
 - Private / security matters: **vexonlang@outlook.com**
 
 **License:** Vexon Open-Control License (VOCL). See `LICENSE` for details.
+“By submitting a contribution, you agree that your contribution will be licensed under the Vexon Open-Control License (VOCL).”
 
