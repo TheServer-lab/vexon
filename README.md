@@ -1,240 +1,128 @@
-# Vexon — experimental scripting language
+# Vexon
 
-Vexon is a lightweight, experimental scripting language with a hand-written **lexer**, **parser**, **compiler**, and **virtual machine** — all implemented from scratch in JavaScript.  
-It’s designed to be small and readable, fast to iterate on, and useful for prototyping scripts, tools, and small games.
+**Vexon** is an experimental programming language and runtime focused on simplicity, control, and extensibility. It is designed to be approachable for experimentation while remaining powerful enough to build real tools, GUIs, and games.
 
-> **Status:** Experimental — good for learning and prototyping. Not production-ready.
-
----
-
-## Table of contents
-- Quick start
-- Run from source (recommended)
-- Minimal syntax & examples
-- CLI usage
-- Project structure
-- Design notes & implementation details
-- Grammar (mini-BNF)
-- Contributing
-- License
-- Security & trust
-- Contact / further reading
+Vexon prioritizes:
+- A clean and readable syntax
+- A hackable runtime and tooling ecosystem
+- Optional GUI support via Electron
+- Community-driven evolution
 
 ---
 
-## Quick start
+## 🚀 Getting Started
 
-**Prerequisites**
-- Node.js **v16+** (tested with Node 18)
-- Git
+### Prerequisites
 
-**Clone and run**
+- **Node.js** (required)
+- npm (included with Node.js)
+
+### Installation
+
+Clone the repository:
+
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/<your-username>/vexon.git
 cd vexon
+```
 
+Install dependencies:
+
+```bash
 npm install
-node vexon_cli.js run examples/hello.vx
 ```
 
-Vexon runs **directly from source using Node.js**. No executables are required.
-
----
-
-## CLI usage
-
-Vexon ships with a small Node.js CLI:
+### Running a Vexon file
 
 ```bash
-node vexon_cli.js run <file.vx> [--debug]
-node vexon_cli.js compile <file.vx> [--debug]
+vx example.vx
 ```
 
-### Commands
+### Running GUI programs
 
-**Run**
-```bash
-node vexon_cli.js run program.vx
-```
-- Lexes, parses, compiles, and executes the program on the Vexon VM
-- `--debug` prints bytecode execution steps
-
-**Compile (optional)**
-```bash
-node vexon_cli.js compile program.vx
-```
-- Compiles `.vx` to Vexon bytecode
-- Generates a JS runner and (optionally) a Windows `.exe` using `pkg`
-- This is **optional** and not required to use the language
-
-> For safety and transparency, running from source is the recommended path.
-
----
-
-## Run from source (recommended)
-
-Typical workflow:
-1. Create or edit a `.vx` file
-2. Run it using the CLI
+GUI programs require Electron:
 
 ```bash
-node ./bin/vexon.js my_program.vx
+npm install electron --save-dev
 ```
 
----
-
-## Minimal syntax & examples
-
-### Hello world
-```vexon
-message = "Hello, Vexon!"
-print(message)
-```
-
-### Variables & arithmetic
-```vexon
-a = 10
-b = 3
-print(a + b * 2)
-```
-
-### Functions
-```vexon
-function add(x, y) {
-    return x + y
-}
-
-print(add(2, 3))
-```
-
-### Loops
-```vexon
-i = 0
-sum = 0
-while i < 5 {
-    sum = sum + i
-    i = i + 1
-}
-print(sum)
-```
-
-### Modules / imports
-```vexon
-import "math_utils.vx" as math
-print(math["add"](2, 3))
-```
-
----
-
-## CLI usage
+Then run:
 
 ```bash
-node ./bin/vexon.js path/to/file.vx
-```
-
-Optional flags may include:
-- `--help`
-- `--debug`
-- `--repl`
-
----
-
-## Project structure
-
-```text
-/bin
-  vexon_cli.js        # CLI entry point
-/src
-  vexon_core.js       # Lexer, parser, compiler, VM
-/examples
-  hello.vx
-LICENSE
-README.md
-package.json
-```text
-/bin
-  vexon.js
-/src
-  lexer.js
-  parser.js
-  ast.js
-  compiler.js
-  vm.js
-/examples
-  hello.vx
-LICENSE
-README.md
-package.json
+vx gui_example.vx
 ```
 
 ---
 
-## Design notes & implementation details
+## 📦 Building GUI Apps
 
-**Compiler pipeline**
-- Hand-written lexer with line/column tracking
-- Pratt parser with operator precedence
-- AST → bytecode compiler
-- Stack-based virtual machine
+To build GUI-based Vexon applications:
 
-**VM highlights**
-- Separate call frames with local scopes
-- Safe `HALT` handling (functions do not terminate the VM)
-- Import system with module caching
-- Built-in exception handling (`try` / `catch` / `throw`)
-
-**Design philosophy**
-- Minimal syntax
-- Explicit control flow
-- Small, readable implementation intended for learning and experimentation
-
----
-
-## Grammar (mini-BNF)
-
-```
-program        ::= statement*
-statement      ::= var_decl | function_decl | expression_stmt | if_stmt | while_stmt | return_stmt
-var_decl       ::= IDENT '=' expression
-function_decl  ::= 'function' IDENT? '(' params? ')' '{' statement* '}'
-params         ::= IDENT (',' IDENT)*
-expression     ::= assignment
+```bash
+npm install electron-builder --save-dev
 ```
 
----
-
-## Contributing
-
-1. Open an issue
-2. Fork the repo
-3. Create a feature branch
-4. Submit a PR
+Then use the Vexon compiler to package your app.
 
 ---
 
-## License
+## 📚 Documentation
 
-This project is licensed under the **Vexon Open-Control License (VOCL) 1.0**. See the `LICENSE` file for the full terms and attribution.
+- Language syntax and examples: **See `/examples`**
+- Runtime and core behavior: **See `/core`**
+- GUI usage and demos: **See `/gui`**
 
----
-
-## Security &
-
-- Vexon can be run entirely from source via Node.js
-- No executables are required or trusted by default
-- Generated executables (via `pkg`) are optional and user-initiated
-- The compiler, VM, and runtime are fully contained in `vexon_core.js`
+More documentation will be added as the language evolves.
 
 ---
 
-## AI / authorship note
+## 🤝 Contributing
 
-The compiler, VM, and language design were implemented manually. AI tools were used occasionally for **documentation wording and minor refactoring suggestions**, but the architecture, bytecode format, parser, and VM logic were written and debugged by hand.
+Contributions are welcome and encouraged.
+
+Before contributing, please read:
+
+- [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)
+
+Ways you can help:
+- Improve the language syntax or runtime
+- Add examples or demos
+- Fix bugs or improve stability
+- Build tools, libraries, or GUIs using Vexon
 
 ---
 
-## Contact / further reading
+## 🔐 Security
 
-Issues and technical discussions are welcome via the repository.
-if you wish to contact me visit: https://vexonlang.blogspot.com/
-or send an email at: vexonlang@outlook.com
+If you discover a security vulnerability, **please do not open a public issue**.
+
+Instead, see:
+- [`SECURITY.md`](SECURITY.md)
+
+and report it privately via email.
+
+---
+
+## 📬 Contact
+
+For questions, collaboration, or security reports:
+
+📧 **vexonlang@outlook.com**
+
+---
+
+## 📜 License
+
+Vexon is licensed under the **Vexon Open-Control License (VOCL)**.
+
+See [`LICENSE`](LICENSE) for details.
+
+---
+
+## 🌱 Project Status
+
+Vexon is under **active development**.
+
+Breaking changes may occur between versions as the language and tooling mature. Feedback and experimentation are strongly encouraged.
+
