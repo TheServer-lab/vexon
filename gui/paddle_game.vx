@@ -1,0 +1,99 @@
+use gui
+
+// 1. Setup
+let W = 600;
+let H = 400;
+let win = Window("Vexon Paddle", W, H);
+let cvs = Canvas(W, H);
+win.add(cvs);
+
+// 2. Game State
+let ballX = 300;
+let ballY = 200;
+let ballDX = 4;
+let ballDY = 4;
+let ballSize = 15;
+
+let paddleX = 250;
+let paddleW = 100;
+let paddleH = 15;
+
+let score = 0;
+let running = true;
+
+// 3. The Drawing Function
+fn render() {
+    cvs.clear();
+    
+    // Background
+    cvs.drawRect(0, 0, W, H, "#0f172a");
+
+    // Draw Paddle
+    cvs.drawRect(paddleX, H - 40, paddleW, paddleH, "#38bdf8");
+
+    // Draw Ball
+    cvs.drawRect(ballX, ballY, ballSize, ballSize, "#fbbf24");
+
+    // HUD
+    cvs.drawText(20, 30, "Score: " + toString(score), "#ffffff");
+
+    if (!running) {
+        cvs.drawText(200, 200, "GAME OVER - Press Any Key", "#f87171");
+    }
+
+    // This is the command that makes it "not empty"
+    win.show();
+}
+
+// 4. Game Logic
+fn tick() {
+    if (running) {
+        // Move ball
+        ballX = ballX + ballDX;
+        ballY = ballY + ballDY;
+
+        // Wall Bouncing (Left/Right/Top)
+        if (ballX <= 0) { ballDX = 4; }
+        if (ballX >= W - ballSize) { ballDX = -4; }
+        if (ballY <= 0) { ballDY = 4; }
+
+        // Paddle Collision
+        if (ballY + ballSize >= H - 40) {
+            if (ballX + ballSize >= paddleX) {
+                if (ballX <= paddleX + paddleW) {
+                    ballDY = -4; // Bounce up
+                    score = score + 1;
+                }
+            }
+        }
+
+        // Bottom collision (Game Over)
+        if (ballY > H) {
+            running = false;
+        }
+    }
+    
+    render();
+}
+
+// 5. Input Handler
+fn onInput(key) {
+    if (!running) {
+        // Reset Game
+        ballX = 300; ballY = 200;
+        score = 0;
+        running = true;
+    }
+    
+    // Move Paddle
+    if (key == "arrowleft") { paddleX = paddleX - 25; }
+    if (key == "arrowright") { paddleX = paddleX + 25; }
+
+    // Keep paddle in bounds
+    if (paddleX < 0) { paddleX = 0; }
+    if (paddleX > W - paddleW) { paddleX = W - paddleW; }
+}
+
+// 6. Execution
+win.on("keydown", onInput);
+setInterval(tick, 16);

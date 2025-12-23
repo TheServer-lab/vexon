@@ -1,0 +1,133 @@
+use gui
+
+// 1. Setup
+let W = 600;
+let H = 400;
+let win = Window("Vexon Atari", W, H);
+let cvs = Canvas(W, H);
+win.add(cvs);
+
+// 2. Ball & Paddle State
+let ballX = 300; let ballY = 250;
+let ballDX = 4;  let ballDY = -4;
+let ballSize = 12;
+
+let paddleX = 250;
+let paddleW = 100;
+let paddleSpeed = 35;
+
+// 3. Bricks (Flat variables for stability)
+let b1v = true; let b2v = true; let b3v = true; let b4v = true; let b5v = true;
+let brickW = 100;
+let brickH = 25;
+let brickY = 60;
+
+let score = 0;
+let running = true;
+
+fn resetGame() {
+    ballX = 300; ballY = 250;
+    ballDX = 4;  ballDY = -4;
+    paddleX = 250;
+    b1v = true; b2v = true; b3v = true; b4v = true; b5v = true;
+    score = 0;
+    running = true;
+}
+
+fn render() {
+    cvs.clear();
+    cvs.drawRect(0, 0, W, H, "#000000"); 
+
+    // Draw Bricks with Atari Colors
+    if (b1v) { cvs.drawRect(50,  brickY, brickW, brickH, "#ff0000"); } // Red
+    if (b2v) { cvs.drawRect(150, brickY, brickW, brickH, "#ff8800"); } // Orange
+    if (b3v) { cvs.drawRect(250, brickY, brickW, brickH, "#ffff00"); } // Yellow
+    if (b4v) { cvs.drawRect(350, brickY, brickW, brickH, "#00ff00"); } // Green
+    if (b5v) { cvs.drawRect(450, brickY, brickW, brickH, "#0000ff"); } // Blue
+
+    // Draw Paddle & Ball
+    cvs.drawRect(paddleX, H - 40, paddleW, 15, "#ffffff");
+    cvs.drawRect(ballX, ballY, ballSize, ballSize, "#ffffff");
+
+    // HUD
+    cvs.drawText(20, 25, "SCORE: " + toString(score), "#ffffff");
+
+    if (score == 5) {
+        cvs.drawText(210, 200, "VICTORY! PRESS R", "#00ff00");
+        running = false;
+    }
+    if (!running && score < 5) {
+        cvs.drawText(210, 200, "GAME OVER - PRESS R", "#ff0000");
+    }
+
+    win.show(); 
+}
+
+fn tick() {
+    if (running) {
+        ballX = ballX + ballDX;
+        ballY = ballY + ballDY;
+
+        // FIXED LEFT WALL: Snap to 0 to prevent going through
+        if (ballX <= 0) { 
+            ballX = 0; 
+            ballDX = 4; 
+        }
+        // FIXED RIGHT WALL: Snap to boundary
+        if (ballX >= W - ballSize) { 
+            ballX = W - ballSize; 
+            ballDX = -4; 
+        }
+        // Top Wall
+        if (ballY <= 0) { 
+            ballY = 0;
+            ballDY = 4; 
+        }
+        // Bottom (Death)
+        if (ballY > H) { running = false; }
+
+        // Paddle Collision with "Angle" logic
+        if (ballY + ballSize >= H - 40 && ballY <= H - 25) {
+            if (ballX + ballSize >= paddleX && ballX <= paddleX + paddleW) {
+                ballDY = -4;
+                // Add a bit of speed variation
+                if (ballX + (ballSize / 2) < paddleX + (paddleW / 2)) {
+                    ballDX = -4; // Hit left side, go left
+                } else {
+                    ballDX = 4;  // Hit right side, go right
+                }
+            }
+        }
+
+        // Brick Collisions
+        if (b1v && ballY <= brickY + brickH && ballX + ballSize >= 50 && ballX <= 50 + brickW) {
+            b1v = false; ballDY = 4; score = score + 1;
+        }
+        if (b2v && ballY <= brickY + brickH && ballX + ballSize >= 150 && ballX <= 150 + brickW) {
+            b2v = false; ballDY = 4; score = score + 1;
+        }
+        if (b3v && ballY <= brickY + brickH && ballX + ballSize >= 250 && ballX <= 250 + brickW) {
+            b3v = false; ballDY = 4; score = score + 1;
+        }
+        if (b4v && ballY <= brickY + brickH && ballX + ballSize >= 350 && ballX <= 350 + brickW) {
+            b4v = false; ballDY = 4; score = score + 1;
+        }
+        if (b5v && ballY <= brickY + brickH && ballX + ballSize >= 450 && ballX <= 450 + brickW) {
+            b5v = false; ballDY = 4; score = score + 1;
+        }
+    }
+    render();
+}
+
+fn onKey(k) {
+    if (k == "r") { resetGame(); }
+    if (running) {
+        if (k == "arrowleft") { paddleX = paddleX - paddleSpeed; }
+        if (k == "arrowright") { paddleX = paddleX + paddleSpeed; }
+        if (paddleX < 0) { paddleX = 0; }
+        if (paddleX > W - paddleW) { paddleX = W - paddleW; }
+    }
+}
+
+win.on("keydown", onKey);
+setInterval(tick, 16);

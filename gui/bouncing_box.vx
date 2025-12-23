@@ -1,0 +1,54 @@
+use gui
+
+// 1. Setup dimensions
+let W = 600;
+let H = 400;
+
+// 2. Initialize Window and Canvas
+let win = Window("Vexon Stable", W, H);
+let cvs = Canvas(W, H);
+win.add(cvs);
+
+// 3. State Variables
+let x = 100;
+let y = 100;
+let dx = 4;
+let dy = 3;
+let size = 50;
+
+// 4. The Render Logic
+fn render() {
+    cvs.clear();
+    
+    // Draw Dark Background
+    cvs.drawRect(0, 0, W, H, "#000000");
+    
+    // Draw Bouncing Square
+    cvs.drawRect(x, y, size, size, "#00ffcc");
+    
+    // Draw Text
+    cvs.drawText(20, 30, "Status: Running", "#ffffff");
+    
+    // CRITICAL: win.show() must be called to send the draw commands to Electron
+    win.show();
+}
+
+// 5. The Update Loop
+fn tick() {
+    // Move
+    x = x + dx;
+    y = y + dy;
+    
+    // Bounce logic
+    if (x <= 0) { dx = 4; }
+    if (x >= W - size) { dx = -4; }
+    if (y <= 0) { dy = 3; }
+    if (y >= H - size) { dy = -3; }
+    
+    // Draw the new state
+    render();
+}
+
+// 6. Start the interval
+// This ensures that even if the window "clears", we redraw it immediately
+setInterval(tick, 16);
