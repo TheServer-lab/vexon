@@ -1,0 +1,49 @@
+// std.vx — Standard Utility Library
+
+// Returns the first index of an element in an array, or -1 if not found
+fn indexOf(arr, item) {
+    let i = 0;
+    for x in arr {
+        if (x == item) { return i; }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// Joins array elements into a string with a separator
+fn join(arr, sep) {
+    let res = "";
+    let i = 0;
+    let l = len(arr);
+    for x in arr {
+        res = res + str(x);
+        if (i < l - 1) { res = res + sep; }
+        i = i + 1;
+    }
+    return res;
+}
+
+// Higher-order function: Map
+fn map(arr, f) {
+    let res = [];
+    for x in arr {
+        push(res, f(x));
+    }
+    return res;
+}
+
+// Higher-order function: Filter
+fn filter(arr, f) {
+    let res = [];
+    for x in arr {
+        if (f(x)) { push(res, x); }
+    }
+    return res;
+}
+
+// Simple assertion for testing
+fn assert(condition, message) {
+    if (!condition) {
+        throw "Assertion Failed: " + message;
+    }
+}
