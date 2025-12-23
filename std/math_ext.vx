@@ -1,0 +1,21 @@
+// math_ext.vx — Extended Math Library
+
+let PI = 3.141592653589793;
+let TWO_PI = 6.283185307179586;
+
+// Returns a random integer between min and max (inclusive)
+fn randomInt(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+// Clamps a value between a min and max
+fn clamp(val, min, max) {
+    if (val < min) { return min; }
+    if (val > max) { return max; }
+    return val;
+}
+
+// Linear interpolation
+fn lerp(a, b, t) {
+    return a + (b - a) * t;
+}
