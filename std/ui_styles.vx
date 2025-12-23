@@ -1,0 +1,37 @@
+// ui_styles.vx — UI Theme Library
+
+let COLORS = {
+    primary: "#0078d4",
+    danger: "#d13438",
+    success: "#107c10",
+    background: "#f3f2f1",
+    text: "#323130"
+};
+
+// Applies a standard "modern" look to a button
+fn themeButton(btn) {
+    btn.setStyle({
+        "backgroundColor": COLORS.primary,
+        "color": "white",
+        "borderRadius": "4px",
+        "padding": "8px 16px",
+        "border": "none",
+        "cursor": "pointer"
+    });
+}
+
+// Helper to create a labeled field
+fn createLabeledInput(labelText, placeholder) {
+    use gui;
+    let box = VBox();
+    let lbl = Label(labelText);
+    lbl.setStyle({"fontWeight": "bold", "marginBottom": "4px"});
+    
+    let txt = Textbox();
+    txt.setStyle({"padding": "4px", "border": "1px solid #ccc"});
+    
+    box.add(lbl);
+    box.add(txt);
+    
+    return { "container": box, "input": txt };
+}
