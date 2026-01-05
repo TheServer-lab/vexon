@@ -1,3 +1,19 @@
+
+// --- injected: improved runtime error reporting helper ---
+function __vexon_format_runtime_error(err, meta){
+  try {
+    var msg = (err && err.message) ? err.message : String(err);
+    if(meta && meta.file){
+      var loc = meta.line ? (meta.file + ':' + meta.line) : meta.file;
+      return msg + ' (at ' + loc + ')';
+    }
+    return msg;
+  } catch(e) {
+    return (err && err.message) ? err.message : String(err);
+  }
+}
+// --- end injected ---
+
 // vexon_core.js
 // Vexon 0.4.1 — core, compiler, VM, builtins (gui + canvas, images, event bridge)
 //
@@ -795,6 +811,10 @@ class VM {
 
     // Builtin factory registry (populated here)
     this.builtins = {
+  gui: () => createGuiBuiltin(this),
+  math: () => createMathBuiltin(this),
+  os:   () => createOsBuiltin(this),
+
       gui: () => createGuiBuiltin(this)
       // Add other builtins here later
     };
@@ -1791,3 +1811,113 @@ function createGuiBuiltin(vm) {
 
 /* ---------------- Exports ---------------- */
 module.exports = { Lexer, Parser, Compiler, VM, Op };
+
+
+/* ------------------ PATCH: math + os builtins + Slider/Checkbox widget shims ------------------
+   This patch appends helper factory functions and a safe shim that augments an existing
+   createGuiBuiltin function (if present) to expose Slider and Checkbox constructors.
+   It also exposes createMathBuiltin/createOsBuiltin via module.exports.__vexon_patches for manual
+   registration into your VM's builtin registry.
+   NOTE: For full integration, register the builtins in your VM constructor:
+     this.builtins.math = () => createMathBuiltin(this)
+     this.builtins.os   = () => createOsBuiltin(this)
+   and ensure your createGuiBuiltin returns include Slider and Checkbox (the shim below injects them if possible).
+--------------------------------------------------------------------------------------------- */
+
+(function(){
+  'use strict';
+
+  // createMathBuiltin: returns an object of math functions (expects VM to call them)
+  function createMathBuiltin(vm){
+    return {
+      sin: function(args){ return Math.sin(Number((args && args[0])||0)); },
+      cos: function(args){ return Math.cos(Number((args && args[0])||0)); },
+      tan: function(args){ return Math.tan(Number((args && args[0])||0)); },
+      sqrt: function(args){ return Math.sqrt(Number((args && args[0])||0)); },
+      pow: function(args){ return Math.pow(Number((args && args[0])||0), Number((args && args[1])||0)); },
+      floor: function(args){ return Math.floor(Number((args && args[0])||0)); },
+      ceil: function(args){ return Math.ceil(Number((args && args[0])||0)); },
+      abs: function(args){ return Math.abs(Number((args && args[0])||0)); },
+      random: function(){ return Math.random(); }
+    };
+  }
+
+  // createOsBuiltin: small OS helpers
+  function createOsBuiltin(vm){
+    var os = require ? require('os') : null;
+    return {
+      platform: function(){ return (typeof process !== 'undefined' && process.platform) ? process.platform : null; },
+      homedir: function(){ return os ? os.homedir() : null; },
+      tmpdir: function(){ return os ? os.tmpdir() : null; },
+      exit: function(args){ var code = Number((args && args[0])||0); if(typeof process !== 'undefined' && process.exit) process.exit(code); },
+      env: function(){ return (typeof process !== 'undefined' && process.env) ? process.env : {}; },
+      cwd: function(){ return (typeof process !== 'undefined' && process.cwd) ? process.cwd() : '.'; },
+      chdir: function(args){ if(typeof process !== 'undefined' && process.chdir) process.chdir(String((args && args[0])||'.')); return null; }
+    };
+  }
+
+  // Export the factories so they can be registered manually if automatic registration is not possible.
+  try{
+    if(typeof module !== 'undefined' && module.exports){
+      module.exports.__vexon_patches = module.exports.__vexon_patches || {};
+      module.exports.__vexon_patches.createMathBuiltin = createMathBuiltin;
+      module.exports.__vexon_patches.createOsBuiltin = createOsBuiltin;
+    }
+  }catch(e){ /* ignore */ }
+
+  // If a createGuiBuiltin function exists in the scope, wrap it to inject Slider/Checkbox constructors
+  try{
+    if(typeof createGuiBuiltin === 'function'){
+      var _origCreateGuiBuiltin = createGuiBuiltin;
+      createGuiBuiltin = function(vm){
+        var gui = _origCreateGuiBuiltin(vm);
+        if(!gui.Slider){
+          // Minimal Slider constructor (stateful object compatible with basic usage)
+          gui.Slider = function(min, max, value){
+            var _min = (typeof min === 'number')?min:0;
+            var _max = (typeof max === 'number')?max:100;
+            var _val = (typeof value === 'number')?value: _min;
+            var _handlers = {};
+            return {
+              _type: 'slider',
+              getValue: function(){ return _val; },
+              setValue: function(v){ _val = Number(v); },
+              setRange: function(a,b){ _min = a; _max = b; },
+              on: function(evt, fn){ if(typeof fn === 'function') _handlers[evt]=fn; },
+              _emit: function(evt,arg){ if(evt==='change'){ _val = Number(arg); } if(_handlers[evt]) try{ _handlers[evt](arg); }catch(e){} },
+              setStyle: function(){},
+            };
+          };
+        }
+        if(!gui.Checkbox){
+          gui.Checkbox = function(initial){
+            var _checked = !!initial;
+            var _handlers = {};
+            return {
+              _type: 'checkbox',
+              isChecked: function(){ return _checked; },
+              setChecked: function(v){ _checked = !!v; },
+              on: function(evt, fn){ if(typeof fn === 'function') _handlers[evt]=fn; },
+              _emit: function(evt,arg){ if(evt==='change'){ _checked = !!arg; } if(_handlers[evt]) try{ _handlers[evt](arg); }catch(e){} },
+              setStyle: function(){},
+            };
+          };
+        }
+        return gui;
+      };
+    }
+  }catch(e){
+    // ignore if scoping prevents patching
+  }
+
+  // Informational: attach to global for inspection if available
+  try{ if(typeof global !== 'undefined') { global.__vexon_patch_info = global.__vexon_patch_info || {}; global.__vexon_patch_info.corePatched = true; } }catch(e){}
+})();
+
+
+// --- injected: VM prototype helper for formatted runtime errors ---
+if(typeof VM !== 'undefined'){
+  VM.prototype._formatRuntimeError = function(err, meta){
+    return __vexon_format_runtime_error(err, meta);
+  };
+}
