@@ -815,7 +815,6 @@ class VM {
   math: () => createMathBuiltin(this),
   os:   () => createOsBuiltin(this),
 
-      gui: () => createGuiBuiltin(this)
       // Add other builtins here later
     };
 
