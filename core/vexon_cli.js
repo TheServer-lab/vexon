@@ -8,6 +8,59 @@
 
 "use strict";
 
+// --- injected: slider & checkbox renderer support ---
+function __vexon_render_slider(w, container) {
+  try {
+    var input = document.createElement('input');
+    input.type = 'range';
+    if (typeof w.min !== 'undefined') input.min = w.min;
+    if (typeof w.max !== 'undefined') input.max = w.max;
+    input.value = (typeof w.value !== 'undefined') ? w.value : (input.min || 0);
+    input.addEventListener('input', function(e){
+      if (typeof window !== 'undefined' && window.ipcRenderer && window.ipcRenderer.send) {
+        window.ipcRenderer.send('event', w.id, 'change', Number(e.target.value));
+      }
+    });
+    container.appendChild(input);
+    return input;
+  } catch (err) {
+    // Safe fallback when executed in Node context or if document is not defined
+    return null;
+  }
+}
+function __vexon_render_checkbox(w, container) {
+  try {
+    var chk = document.createElement('input');
+    chk.type = 'checkbox';
+    chk.checked = !!w.checked;
+    chk.addEventListener('change', function(e){
+      if (typeof window !== 'undefined' && window.ipcRenderer && window.ipcRenderer.send) {
+        window.ipcRenderer.send('event', w.id, 'change', !!e.target.checked);
+      }
+    });
+    container.appendChild(chk);
+    return chk;
+  } catch (err) {
+    return null;
+  }
+}
+// try to augment existing renderWidget if present
+if (typeof window !== 'undefined' && typeof window.renderWidget === 'function') {
+  (function(){
+    var _orig = window.renderWidget;
+    window.renderWidget = function(w, container){
+      if (w && w.type === 'slider') return __vexon_render_slider(w, container);
+      if (w && w.type === 'checkbox') return __vexon_render_checkbox(w, container);
+      return _orig(w, container);
+    };
+  })();
+}
+// --- end injected ---
+
+// ... rest of your CLI implementation follows here ...
+// (keep the original vexon_cli.js code below this point)
+
+
 const fs = require("fs");
 const path = require("path");
 const child_process = require("child_process");
@@ -612,4 +665,53 @@ const debug = args.includes("--debug");
       console.log("   node vexon_cli.js compile <file.vx> [--debug]");
       break;
   }
+})();
+
+
+/* ------------------ PATCH: renderer support for Slider and Checkbox ------------------
+   This appended patch adds minimal notes and a small injection that, if the CLI injects
+   renderer HTML/JS into an Electron BrowserWindow string at runtime and exposes a function
+   `renderWidgets` in that HTML scope, the patch augments it to handle slider/checkbox types.
+   If you already have a renderer template string, search for the widget render switch and
+   add 'slider' and 'checkbox' cases similar to other input widgets.
+--------------------------------------------------------------------------------------------- */
+
+(function(){
+  'use strict';
+  // The patch attempts to attach a helper to window if running in browser renderer.
+  try{
+    if(typeof window !== 'undefined'){
+      window.__vexon_renderer_patched = true;
+      // If a global renderWidget function exists, wrap it to handle slider/checkbox
+      if(typeof window.renderWidget === 'function'){
+        var _origRenderWidget = window.renderWidget;
+        window.renderWidget = function(w, container){
+          if(w && w.type === 'slider'){
+            // create an <input type="range"> inside container
+            var input = document.createElement('input');
+            input.type = 'range';
+            if(typeof w.min !== 'undefined') input.min = w.min;
+            if(typeof w.max !== 'undefined') input.max = w.max;
+            input.value = (typeof w.value !== 'undefined') ? w.value : input.min || 0;
+            input.addEventListener('input', function(e){
+              if(window && window.ipcRenderer && window.ipcRenderer.send) window.ipcRenderer.send('event', w.id, 'change', Number(e.target.value));
+            });
+            container.appendChild(input);
+            return input;
+          } else if(w && w.type === 'checkbox'){
+            var chk = document.createElement('input');
+            chk.type = 'checkbox';
+            chk.checked = !!w.checked;
+            chk.addEventListener('change', function(e){
+              if(window && window.ipcRenderer && window.ipcRenderer.send) window.ipcRenderer.send('event', w.id, 'change', !!e.target.checked);
+            });
+            container.appendChild(chk);
+            return chk;
+          }
+          // fallback to original renderer
+          return _origRenderWidget(w, container);
+        };
+      }
+    }
+  }catch(e){}
 })();
