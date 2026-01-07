@@ -134,28 +134,56 @@ async function runFile(filePath, options = {}) {
 // ---------- spawnElectron ----------
 // Spawns the electron binary (installed in node_modules) to run this script in Electron runtime mode.
 function spawnElectron(entryFile) {
-  let electronBin;
+  const path = require("path");
+  const fs = require("fs");
+  const { spawn } = require("child_process");
+
+  let electronBin = null;
+
   try {
-    // when required from Node, 'electron' package exports the path to the binary — suitable for spawn
-    electronBin = require("electron");
-  } catch (e) {
-    console.error("❌ Electron is required for GUI mode. Install with: npm install electron --save-dev");
-    process.exit(1);
+    const em = require("electron");
+    if (typeof em === "string") {
+      electronBin = em;
+    } else if (em && typeof em.path === "string") {
+      electronBin = em.path;
+    }
+  } catch (e) {}
+
+  // fallback: local node_modules
+  if (!electronBin) {
+    const local = path.resolve(
+      process.cwd(),
+      "node_modules",
+      ".bin",
+      process.platform === "win32" ? "electron.cmd" : "electron"
+    );
+    if (fs.existsSync(local)) electronBin = local;
+  }
+
+  // last resort: global electron command name
+  if (!electronBin) {
+    electronBin = process.platform === "win32" ? "electron.cmd" : "electron";
   }
 
   const args = [__filename, ELECTRON_FLAG, entryFile];
-  console.log("⚡ Spawning Electron for GUI run...");
-  const child = child_process.spawn(electronBin, args, { stdio: "inherit" });
 
-  child.on("close", (code) => {
-    process.exit(code === null ? 0 : code);
+  console.log("[vexon] launching electron:");
+  console.log("  bin :", electronBin);
+  console.log("  args:", args.join(" "));
+
+  const child = spawn(electronBin, args, {
+    stdio: "inherit",
+    shell: process.platform === "win32" // REQUIRED for .cmd on Windows
   });
 
   child.on("error", (err) => {
-    console.error("❌ Failed to spawn Electron:", err);
+    console.error("[vexon] Electron spawn failed:", err && err.message ? err.message : err);
     process.exit(1);
   });
+
+  child.on("exit", (code) => process.exit(code));
 }
+
 
 // ---------- compile helpers (unchanged, but kept) ----------
 function compileToBytecode(filePath) {
