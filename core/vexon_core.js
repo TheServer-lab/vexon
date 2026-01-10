@@ -1,29 +1,13 @@
-
-// --- injected: improved runtime error reporting helper ---
-function __vexon_format_runtime_error(err, meta){
-  try {
-    var msg = (err && err.message) ? err.message : String(err);
-    if(meta && meta.file){
-      var loc = meta.line ? (meta.file + ':' + meta.line) : meta.file;
-      return msg + ' (at ' + loc + ')';
-    }
-    return msg;
-  } catch(e) {
-    return (err && err.message) ? err.message : String(err);
-  }
-}
-// --- end injected ---
-
 // vexon_core.js
-// Vexon 0.4.1 — core, compiler, VM, builtins (gui + canvas, images, event bridge)
-//
-// Exports: { Lexer, Parser, Compiler, VM, Op }
-// Keep this file next to vexon_cli.js
-
+// Vexon 0.4.1 – Complete core with type checker, HTTP server, and all builtins
 "use strict";
 
 const fs = require("fs");
 const path = require("path");
+const http = require("http");
+const https = require("https");
+const url = require("url");
+const querystring = require("querystring");
 
 // Optional readline-sync for input()
 let readlineSync = null;
@@ -35,7 +19,341 @@ if (!fetchImpl) {
   try { fetchImpl = require("node-fetch"); } catch (e) { fetchImpl = null; }
 }
 
-/* ---------------- Lexer ---------------- */
+/* ================ TYPE CHECKER ================ */
+
+class TypeChecker {
+  constructor(ast, options = {}) {
+    this.ast = ast;
+    this.strict = options.strict || false;
+    this.errors = [];
+    this.warnings = [];
+    
+    this.globalEnv = new Map();
+    this.scopes = [];
+    this.functions = new Map();
+    this.classes = new Map();
+    
+    this.initBuiltinTypes();
+  }
+
+  initBuiltinTypes() {
+    this.functions.set('print', { params: ['any'], returns: 'null', variadic: true });
+    this.functions.set('len', { params: ['array|string|object'], returns: 'number' });
+    this.functions.set('range', { params: ['number', 'number?'], returns: 'array<number>' });
+    this.functions.set('push', { params: ['array', 'any'], returns: 'number' });
+    this.functions.set('pop', { params: ['array'], returns: 'any' });
+    this.functions.set('input', { params: ['string?'], returns: 'string' });
+    this.functions.set('toString', { params: ['any'], returns: 'string' });
+    this.functions.set('random', { params: [], returns: 'number' });
+    this.functions.set('time', { params: [], returns: 'number' });
+  }
+
+  check() {
+    for (const stmt of this.ast) {
+      this.checkStmt(stmt);
+    }
+    
+    return {
+      errors: this.errors,
+      warnings: this.warnings,
+      success: this.errors.length === 0
+    };
+  }
+
+  error(msg, loc) {
+    this.errors.push({ message: msg, location: loc });
+  }
+
+  warn(msg, loc) {
+    this.warnings.push({ message: msg, location: loc });
+  }
+
+  currentScope() {
+    return this.scopes.length > 0 ? this.scopes[this.scopes.length - 1] : this.globalEnv;
+  }
+
+  pushScope() { this.scopes.push(new Map()); }
+  popScope() { this.scopes.pop(); }
+
+  getType(name) {
+    for (let i = this.scopes.length - 1; i >= 0; i--) {
+      if (this.scopes[i].has(name)) return this.scopes[i].get(name);
+    }
+    return this.globalEnv.get(name);
+  }
+
+  setType(name, type) {
+    this.currentScope().set(name, type);
+  }
+
+  checkStmt(stmt) {
+    switch (stmt.kind) {
+      case 'let': return this.checkLetStmt(stmt);
+      case 'fn': return this.checkFnStmt(stmt);
+      case 'class': return this.checkClassStmt(stmt);
+      case 'assign': return this.checkAssignStmt(stmt);
+      case 'if': return this.checkIfStmt(stmt);
+      case 'while': return this.checkWhileStmt(stmt);
+      case 'for': return this.checkForStmt(stmt);
+      case 'return': return this.checkReturnStmt(stmt);
+      case 'expr': return this.checkExpr(stmt.expr);
+      default: return 'any';
+    }
+  }
+
+  checkLetStmt(stmt) {
+    const valueType = this.checkExpr(stmt.expr);
+    const declaredType = stmt.typeAnnotation || valueType;
+    
+    if (stmt.typeAnnotation && !this.isCompatible(valueType, declaredType)) {
+      this.error(`Type mismatch: Cannot assign ${valueType} to ${declaredType}`, stmt.loc);
+    }
+    
+    this.setType(stmt.name, declaredType);
+    return declaredType;
+  }
+
+  checkFnStmt(stmt) {
+    const paramTypes = stmt.params.map(p => 
+      (typeof p === 'object' && p.typeAnnotation) ? p.typeAnnotation : 'any'
+    );
+    const returnType = stmt.returnType || 'any';
+    
+    this.functions.set(stmt.name, { params: paramTypes, returns: returnType });
+    
+    this.pushScope();
+    
+    for (let i = 0; i < stmt.params.length; i++) {
+      const param = stmt.params[i];
+      const paramName = typeof param === 'string' ? param : param.name;
+      const paramType = (typeof param === 'object' && param.typeAnnotation) ? param.typeAnnotation : 'any';
+      this.setType(paramName, paramType);
+    }
+    
+    this.currentReturnType = returnType;
+    for (const bodyStmt of stmt.body) this.checkStmt(bodyStmt);
+    
+    this.popScope();
+    this.currentReturnType = null;
+    return 'function';
+  }
+
+  checkClassStmt(stmt) {
+    const classDef = { methods: new Map(), properties: new Map() };
+    
+    for (const method of stmt.methods) {
+      const paramTypes = method.params.map(p => 
+        (typeof p === 'object' && p.typeAnnotation) ? p.typeAnnotation : 'any'
+      );
+      const returnType = method.returnType || 'any';
+      classDef.methods.set(method.name, { params: paramTypes, returns: returnType });
+      
+      this.pushScope();
+      this.setType('this', stmt.name);
+      
+      for (let i = 0; i < method.params.length; i++) {
+        const param = method.params[i];
+        const paramName = typeof param === 'string' ? param : param.name;
+        const paramType = (typeof param === 'object' && param.typeAnnotation) ? param.typeAnnotation : 'any';
+        this.setType(paramName, paramType);
+      }
+      
+      this.currentReturnType = returnType;
+      for (const bodyStmt of method.body) this.checkStmt(bodyStmt);
+      this.popScope();
+    }
+    
+    this.classes.set(stmt.name, classDef);
+    this.setType(stmt.name, 'class');
+    return 'class';
+  }
+
+  checkAssignStmt(stmt) {
+    const targetType = this.checkExpr(stmt.target);
+    const valueType = this.checkExpr(stmt.expr);
+    
+    if (targetType !== 'any' && !this.isCompatible(valueType, targetType)) {
+      this.error(`Type mismatch: Cannot assign ${valueType} to ${targetType}`, stmt.loc);
+    }
+    return valueType;
+  }
+
+  checkIfStmt(stmt) {
+    const condType = this.checkExpr(stmt.cond);
+    if (condType !== 'any' && condType !== 'boolean') {
+      this.warn(`Condition should be boolean, got ${condType}`, stmt.loc);
+    }
+    for (const thenStmt of stmt.then) this.checkStmt(thenStmt);
+    for (const elseStmt of stmt.otherwise) this.checkStmt(elseStmt);
+  }
+
+  checkWhileStmt(stmt) {
+    const condType = this.checkExpr(stmt.cond);
+    if (condType !== 'any' && condType !== 'boolean') {
+      this.warn(`Condition should be boolean, got ${condType}`, stmt.loc);
+    }
+    for (const bodyStmt of stmt.body) this.checkStmt(bodyStmt);
+  }
+
+  checkForStmt(stmt) {
+    const iterableType = this.checkExpr(stmt.iterable);
+    if (!this.isIterable(iterableType)) {
+      this.error(`Cannot iterate over ${iterableType}`, stmt.loc);
+    }
+    this.pushScope();
+    const elementType = this.getElementType(iterableType);
+    this.setType(stmt.iterator, elementType);
+    for (const bodyStmt of stmt.body) this.checkStmt(bodyStmt);
+    this.popScope();
+  }
+
+  checkReturnStmt(stmt) {
+    if (!stmt.expr) {
+      if (this.currentReturnType && this.currentReturnType !== 'null' && this.currentReturnType !== 'any') {
+        this.error(`Function should return ${this.currentReturnType}, got null`, stmt.loc);
+      }
+      return;
+    }
+    const returnType = this.checkExpr(stmt.expr);
+    if (this.currentReturnType && !this.isCompatible(returnType, this.currentReturnType)) {
+      this.error(`Return type mismatch: expected ${this.currentReturnType}, got ${returnType}`, stmt.loc);
+    }
+  }
+
+  checkExpr(expr) {
+    if (!expr) return 'any';
+    
+    switch (expr.kind) {
+      case 'num': return 'number';
+      case 'str': return 'string';
+      case 'bool': return 'boolean';
+      case 'null': return 'null';
+      case 'array': return this.checkArrayExpr(expr);
+      case 'obj': return 'object';
+      case 'var': return this.checkVarExpr(expr);
+      case 'bin': return this.checkBinExpr(expr);
+      case 'unary': return this.checkUnaryExpr(expr);
+      case 'call': return this.checkCallExpr(expr);
+      case 'index': return 'any';
+      case 'prop': return 'any';
+      default: return 'any';
+    }
+  }
+
+  checkArrayExpr(expr) {
+    if (expr.elements.length === 0) return 'array<any>';
+    const elementTypes = expr.elements.map(e => this.checkExpr(e));
+    const firstType = elementTypes[0];
+    const allSame = elementTypes.every(t => t === firstType);
+    return allSame ? `array<${firstType}>` : 'array<any>';
+  }
+
+  checkVarExpr(expr) {
+    const type = this.getType(expr.name);
+    if (!type && this.strict) {
+      this.error(`Undefined variable: ${expr.name}`, expr.loc);
+    }
+    return type || 'any';
+  }
+
+  checkBinExpr(expr) {
+    const leftType = this.checkExpr(expr.left);
+    const rightType = this.checkExpr(expr.right);
+    
+    if (['+', '-', '*', '/', '%'].includes(expr.op)) {
+      if (expr.op === '+' && (leftType === 'string' || rightType === 'string')) return 'string';
+      if (leftType !== 'number' && leftType !== 'any') {
+        this.warn(`Left operand should be number, got ${leftType}`, expr.loc);
+      }
+      if (rightType !== 'number' && rightType !== 'any') {
+        this.warn(`Right operand should be number, got ${rightType}`, expr.loc);
+      }
+      return 'number';
+    }
+    
+    if (['==', '!=', '===', '!==', '<', '<=', '>', '>=', '&&', '||'].includes(expr.op)) {
+      return 'boolean';
+    }
+    return 'any';
+  }
+
+  checkUnaryExpr(expr) {
+    return expr.op === '!' ? 'boolean' : this.checkExpr(expr.expr);
+  }
+
+  checkCallExpr(expr) {
+    if (expr.callee.kind === 'var') {
+      const funcSig = this.functions.get(expr.callee.name);
+      if (funcSig) {
+        if (!funcSig.variadic && expr.args.length !== funcSig.params.length) {
+          this.error(`Function ${expr.callee.name} expects ${funcSig.params.length} arguments, got ${expr.args.length}`, expr.loc);
+        }
+        for (let i = 0; i < Math.min(expr.args.length, funcSig.params.length); i++) {
+          const argType = this.checkExpr(expr.args[i]);
+          const paramType = funcSig.params[i];
+          if (!this.isCompatible(argType, paramType)) {
+            this.error(`Argument ${i + 1} type mismatch: expected ${paramType}, got ${argType}`, expr.loc);
+          }
+        }
+        return funcSig.returns;
+      }
+    }
+    return 'any';
+  }
+
+  isCompatible(actualType, expectedType) {
+    if (expectedType === 'any' || actualType === 'any') return true;
+    if (actualType === expectedType) return true;
+    if (expectedType.includes('|')) {
+      return expectedType.split('|').some(t => this.isCompatible(actualType, t));
+    }
+    if (expectedType.endsWith('?')) {
+      const baseType = expectedType.slice(0, -1);
+      return actualType === 'null' || this.isCompatible(actualType, baseType);
+    }
+    if (expectedType.startsWith('array<') && actualType.startsWith('array<')) {
+      const expectedElement = this.getElementType(expectedType);
+      const actualElement = this.getElementType(actualType);
+      return this.isCompatible(actualElement, expectedElement);
+    }
+    return false;
+  }
+
+  isIterable(type) {
+    return type === 'array' || type.startsWith('array<') || type === 'string' || type === 'any';
+  }
+
+  getElementType(arrayType) {
+    if (arrayType === 'string') return 'string';
+    if (arrayType.startsWith('array<')) return arrayType.slice(6, -1);
+    return 'any';
+  }
+
+  formatReport() {
+    let report = '';
+    if (this.errors.length > 0) {
+      report += `\n❌ Type Errors (${this.errors.length}):\n`;
+      for (const err of this.errors) {
+        const loc = err.location ? `${err.location.line}:${err.location.col}` : '?';
+        report += `  ${loc} - ${err.message}\n`;
+      }
+    }
+    if (this.warnings.length > 0) {
+      report += `\n⚠️  Type Warnings (${this.warnings.length}):\n`;
+      for (const warn of this.warnings) {
+        const loc = warn.location ? `${warn.location.line}:${warn.location.col}` : '?';
+        report += `  ${loc} - ${warn.message}\n`;
+      }
+    }
+    if (this.errors.length === 0 && this.warnings.length === 0) {
+      report += '\n✓ No type errors found\n';
+    }
+    return report;
+  }
+}
+
+/* ================ LEXER ================ */
+
 function isAlpha(c) { return /[A-Za-z_]/.test(c); }
 function isDigit(c) { return /[0-9]/.test(c); }
 
@@ -73,7 +391,6 @@ class Lexer {
       const startCol = this.col;
       const startIdx = this.i;
 
-      // triple-char operators
       if ((c === "=" && this.src[this.i + 1] === "=" && this.src[this.i + 2] === "=")) {
         const v = this.next() + this.next() + this.next();
         out.push(this.makeToken("symbol", v, startLine, startCol, startIdx));
@@ -85,7 +402,6 @@ class Lexer {
         continue;
       }
 
-      // two-char symbols
       if ((c === ">" || c === "<" || c === "=" || c === "!") && this.src[this.i + 1] === "=") {
         const v = this.next() + this.next();
         out.push(this.makeToken("symbol", v, startLine, startCol, startIdx));
@@ -145,7 +461,8 @@ class Lexer {
   }
 }
 
-/* ---------------- Parser ---------------- */
+/* ================ PARSER ================ */
+
 class Parser {
   constructor(tokens, src = "") {
     this.tokens = tokens;
@@ -196,27 +513,23 @@ class Parser {
   }
 
   parseUse() {
-    this.next(); // use
+    this.next();
     if (this.peek().t !== "id") throw new Error(this.formatTokenError(this.peek(), "use expects builtin name"));
     const name = this.next().v;
     return { kind: "use", name };
   }
 
   parseClass() {
-    this.next(); // consume 'class'
-    if (this.peek().t !== "id") {
-      throw new Error(this.formatTokenError(this.peek(), "class expects a name"));
-    }
+    this.next();
+    if (this.peek().t !== "id") throw new Error(this.formatTokenError(this.peek(), "class expects a name"));
     const name = this.next().v;
-    if (!this.matchSymbol("{")) {
-      throw new Error(this.formatTokenError(this.peek(), "class missing {"));
-    }
+    if (!this.matchSymbol("{")) throw new Error(this.formatTokenError(this.peek(), "class missing {"));
     const methods = [];
     while (!this.matchSymbol("}")) {
       if (!(this.peek().t === "keyword" && (this.peek().v === "fn" || this.peek().v === "func" || this.peek().v === "function"))) {
         throw new Error(this.formatTokenError(this.peek(), "class body expects fn"));
       }
-      this.next(); // fn
+      this.next();
       if (this.peek().t !== "id") throw new Error(this.formatTokenError(this.peek(), "method expects a name"));
       const mName = this.next().v;
       if (!this.matchSymbol("(")) throw new Error(this.formatTokenError(this.peek(), "method missing ("));
@@ -316,7 +629,7 @@ class Parser {
   }
 
   parseIf() {
-    this.next(); // consume 'if'
+    this.next();
     const cond = this.parseExpr();
     let then = [];
     if (this.matchSymbol("{")) {
@@ -496,7 +809,8 @@ class Parser {
   }
 }
 
-/* ---------------- Bytecode ops ---------------- */
+/* ================ BYTECODE OPS ================ */
+
 const Op = {
   CONST: "CONST", LOAD: "LOAD", STORE: "STORE", POP: "POP",
   ADD: "ADD", SUB: "SUB", MUL: "MUL", DIV: "DIV", MOD: "MOD",
@@ -510,16 +824,26 @@ const Op = {
   USE: "USE"
 };
 
-/* ---------------- Compiler ---------------- */
+/* ================ COMPILER ================ */
+
 class Compiler {
-  constructor() { this.consts = []; this.code = []; this.loopStack = []; this.omitHalt = false; }
+  constructor() { 
+    this.consts = []; 
+    this.code = []; 
+    this.sourceMap = []; 
+    this.loopStack = []; 
+    this.omitHalt = false; 
+  }
+  
   addConst(v) { const idx = this.consts.indexOf(v); if (idx !== -1) return idx; this.consts.push(v); return this.consts.length - 1; }
-  emit(inst) { this.code.push(inst); }
+  emit(inst, sourceLoc = null) { this.code.push(inst); this.sourceMap.push(sourceLoc); }
 
   compile(stmts, opts = {}) {
     this.consts = [];
     this.code = [];
+    this.sourceMap = [];
     this.omitHalt = !!opts.omitHalt;
+    this.sourcePath = opts.sourcePath || '<input>';
     return this.compileProgram(stmts);
   }
 
@@ -531,7 +855,12 @@ class Compiler {
       else this.emitStmt(s);
     }
     if (!this.omitHalt) this.emit({ op: Op.HALT });
-    return { consts: this.consts, code: this.code };
+    return { 
+      consts: this.consts, 
+      code: this.code, 
+      sourceMap: this.sourceMap, 
+      sourcePath: this.sourcePath 
+    };
   }
 
   emitStmt(s) {
@@ -574,7 +903,6 @@ class Compiler {
         break;
       }
       case "class": {
-        // create class object and methods
         this.emit({ op: Op.NEWOBJ, arg: 0 });
         for (const m of s.methods) {
           const sub = new Compiler();
@@ -788,37 +1116,35 @@ class Compiler {
   }
 }
 
-/* ---------------- VM ---------------- */
+/* ================ VM ================ */
+
 class VM {
   constructor(consts = [], code = [], options = {}) {
     this.consts = Array.from(consts);
     this.code = Array.from(code);
 
-    // frames: { code, consts, ip, locals: Map(), baseDir, isGlobal, tryStack: [], module: object|null }
     this.frames = [];
     this.stack = [];
     this.globals = new Map();
     this.importCache = new Map();
     this.baseDir = options.baseDir || process.cwd();
     this.debug = !!options.debug;
+    
+    this.sourceMap = options.sourceMap || [];
+    this.sourcePath = options.sourcePath || '<unknown>';
 
-    // timers (for setTimeout/setInterval) -> id -> {timer, type}
     this._timers = new Map();
 
-    // VM watchdog
     this.ticks = 0;
     this.maxTicks = options.maxTicks || 5_000_000;
 
-    // Builtin factory registry (populated here)
     this.builtins = {
-  gui: () => createGuiBuiltin(this),
-  math: () => createMathBuiltin(this),
-  os:   () => createOsBuiltin(this),
-
-      // Add other builtins here later
+      gui: () => createGuiBuiltin(this),
+      math: () => createMathBuiltin(this),
+      os: () => createOsBuiltin(this),
+      http: () => createHttpBuiltin(this),
     };
 
-    // Hook set by CLI / embedder to receive serialized UI
     this.onGuiRender = null;
 
     this.setupBuiltins();
@@ -910,7 +1236,6 @@ class VM {
       return String(obj);
     }});
 
-    // fetch builtin
     this.globals.set("fetch", { builtin: true, call: (args) => {
       const url = String(args[0]);
       const opts = args[1] || {};
@@ -967,13 +1292,11 @@ class VM {
       });
     }});
 
-    // sleep
     this.globals.set("sleep", { builtin: true, call: (args) => {
       const ms = Number(args[0] || 0);
       return new Promise(resolve => setTimeout(resolve, ms));
     }});
 
-    // timers and scheduling
     this.globals.set("setTimeout", { builtin: true, call: (args) => {
       const fn = args[0];
       const ms = Number(args[1] || 0);
@@ -1098,16 +1421,8 @@ class VM {
     this.globals.set(name, value);
   }
 
-  // Attach Electron: optional helper (set by CLI)
-  attachElectronWindow(win, ipcMain) {
-    this._electronWindow = win;
-    this._electronIpc = ipcMain;
-  }
-
-  // Helper used by GUI events to call Vexon functions from JS (returns Promise)
   async callFunction(fn, args = []) {
     if (!fn || !fn.code || !Array.isArray(fn.code)) {
-      // allow plain JS functions for some builtins
       if (typeof fn === "function") {
         const res = fn(...args);
         if (res && typeof res.then === "function") return await res;
@@ -1127,7 +1442,6 @@ class VM {
       module: fn.__module || null
     };
 
-    // bind params
     for (let i = 0; i < (fn.params ? fn.params.length : 0); i++) {
       frame.locals.set(fn.params[i], args[i]);
     }
@@ -1141,7 +1455,6 @@ class VM {
     return null;
   }
 
-  // send serialized UI snapshot to embedder via onGuiRender
   __sendUI(ui, widgetMap) {
     const serial = {};
     for (const [id, w] of widgetMap.entries()) {
@@ -1171,7 +1484,9 @@ class VM {
       baseDir: this.baseDir,
       isGlobal: true,
       tryStack: [],
-      module: null
+      module: null,
+      sourceMap: this.sourceMap,
+      sourcePath: this.sourcePath
     };
 
     if (this.frames.length === 0) this.frames.push(globalFrame);
@@ -1400,7 +1715,6 @@ class VM {
 
             if (callee === undefined || callee === null) throw new Error("Call of undefined or null");
 
-            // Builtin call
             if (callee && callee.builtin && typeof callee.call === "function") {
               const res = callee.call(args);
               if (res && typeof res.then === "function") {
@@ -1412,10 +1726,9 @@ class VM {
               break;
             }
 
-            // Class object call (constructor style): object with init function
             if (callee && typeof callee === "object" && callee.init && callee.init.code) {
               const obj = {};
-              const initFn = callee.init; // expects params: this, ...
+              const initFn = callee.init;
               const funcFrame = {
                 code: initFn.code,
                 consts: initFn.consts,
@@ -1435,7 +1748,6 @@ class VM {
               break;
             }
 
-            // User function object
             if (callee && callee.code && Array.isArray(callee.code)) {
               const funcFrame = {
                 code: callee.code,
@@ -1454,7 +1766,6 @@ class VM {
               break;
             }
 
-            // Plain JS function
             if (typeof callee === "function") {
               const res = callee(...args);
               if (res && typeof res.then === "function") {
@@ -1532,16 +1843,12 @@ class VM {
             if (!this.builtins[name]) throw new Error("Unknown builtin: " + name);
             if (!this.globals.has(name)) {
               const mod = this.builtins[name]();
-              // Export module object under its name for compatibility
               this.globals.set(name, mod);
-              // Also export each property of the module as top-level globals
               if (mod && typeof mod === "object") {
                 for (const k of Object.keys(mod)) {
                   try {
-                    // do not overwrite existing globals unintentionally
                     if (!this.globals.has(k)) this.globals.set(k, mod[k]);
                   } catch (e) {
-                    // safe guard: ignore property set failures
                     try { this.globals.set(k, mod[k]); } catch (err) {}
                   }
                 }
@@ -1578,36 +1885,31 @@ class VM {
   }
 }
 
-/* ---------------- GUI builtin (embedded) ---------------- */
+/* ================ GUI BUILTIN ================ */
 
 function createGuiBuiltin(vm) {
-  // widget registry shared with VM for serialization
   let widgetId = 1;
-  const widgets = new Map(); // id -> state object
-  const handlersMap = new Map(); // id -> handlers map (eventName -> vexonFn)
+  const widgets = new Map();
+  const handlersMap = new Map();
   const STYLE_WHITELIST = new Set(["padding","margin","background","color","fontSize","width","height","display","flexDirection"]);
 
-  // helper to set style object on widget state
   function mergeStyle(state, styleObj) {
     state.style = state.style || {};
     for (const k of Object.keys(styleObj)) {
       if (STYLE_WHITELIST.has(k)) {
         state.style[k] = styleObj[k];
       } else {
-        // allow unknown keys but set them — renderer will ignore unknowns
         state.style[k] = styleObj[k];
       }
     }
   }
 
-  // Window
   function Window(title, w, h) {
     const id = widgetId++;
     const state = { type: "window", title: title || "", width: w || 400, height: h || 300, children: [], style: {} };
     widgets.set(id, state);
     handlersMap.set(id, {});
 
-    // Provide event dispatch hook for CLI's electron bridge
     vm.__dispatchEvent = vm.__dispatchEvent || function() { if (vm.debug) console.log("dispatchEvent placeholder"); };
     vm.__dispatchGlobalKey = vm.__dispatchGlobalKey || function() { if (vm.debug) console.log("dispatchKey placeholder"); };
 
@@ -1634,7 +1936,6 @@ function createGuiBuiltin(vm) {
     };
   }
 
-  // Button
   function Button(text) {
     const id = widgetId++;
     const state = { type: "button", text: text ?? "", style: {} };
@@ -1654,7 +1955,6 @@ function createGuiBuiltin(vm) {
     };
   }
 
-  // Label
   function Label(text) {
     const id = widgetId++;
     const state = { type: "label", text: text ?? "", style: {} };
@@ -1668,7 +1968,6 @@ function createGuiBuiltin(vm) {
     };
   }
 
-  // TextBox
   function TextBox() {
     const id = widgetId++;
     let value = "";
@@ -1694,7 +1993,6 @@ function createGuiBuiltin(vm) {
     };
   }
 
-  // VBox
   function VBox() {
     const id = widgetId++;
     const children = [];
@@ -1709,7 +2007,6 @@ function createGuiBuiltin(vm) {
     };
   }
 
-  // HBox
   function HBox() {
     const id = widgetId++;
     const children = [];
@@ -1719,12 +2016,12 @@ function createGuiBuiltin(vm) {
     return {
       _id: id,
       _type: "hbox",
-      add(w) { if (w && w._id) children.push(w._id); vm.__sendUI({ type: "noop" }, widgets); },
+      add(w) { if (w && w._id) children
+      .push(w._id); vm.__sendUI({ type: "noop" }, widgets); },
       setStyle(obj) { mergeStyle(state, obj); vm.__sendUI({ type: "noop" }, widgets); }
     };
   }
 
-  // Canvas
   function Canvas(w, h) {
     const id = widgetId++;
     const state = { type: "canvas", width: w || 300, height: h || 150, ops: [], dirty: true, style: {} };
@@ -1770,7 +2067,6 @@ function createGuiBuiltin(vm) {
     };
   }
 
-  // Image wrapper (path)
   function ImageObj(p) {
     const id = widgetId++;
     const state = { type: "image", path: p };
@@ -1779,8 +2075,6 @@ function createGuiBuiltin(vm) {
     return { _id: id, _type: "image" };
   }
 
-  // Expose dispatch helpers for the embedder to call into handlersMap
-  // vm.__dispatchEvent(id, ev, ...args) will call the handler stored in createGuiBuiltin closure.
   vm.__dispatchEvent = function(id, ev, ...args) {
     const hmap = handlersMap.get(id);
     if (!hmap) return;
@@ -1788,14 +2082,12 @@ function createGuiBuiltin(vm) {
     if (h) vm.callFunction(h, args);
   };
 
-  // global key dispatch: call 'keydown' / 'keyup' handlers on windows
   vm.__dispatchGlobalKey = function(type, key) {
     for (const [id, hmap] of handlersMap.entries()) {
       if (hmap[type]) vm.callFunction(hmap[type], [key]);
     }
   };
 
-  // expose constructors
   return {
     Window,
     Button,
@@ -1808,115 +2100,292 @@ function createGuiBuiltin(vm) {
   };
 }
 
-/* ---------------- Exports ---------------- */
-module.exports = { Lexer, Parser, Compiler, VM, Op };
+/* ================ MATH BUILTIN ================ */
 
-
-/* ------------------ PATCH: math + os builtins + Slider/Checkbox widget shims ------------------
-   This patch appends helper factory functions and a safe shim that augments an existing
-   createGuiBuiltin function (if present) to expose Slider and Checkbox constructors.
-   It also exposes createMathBuiltin/createOsBuiltin via module.exports.__vexon_patches for manual
-   registration into your VM's builtin registry.
-   NOTE: For full integration, register the builtins in your VM constructor:
-     this.builtins.math = () => createMathBuiltin(this)
-     this.builtins.os   = () => createOsBuiltin(this)
-   and ensure your createGuiBuiltin returns include Slider and Checkbox (the shim below injects them if possible).
---------------------------------------------------------------------------------------------- */
-
-(function(){
-  'use strict';
-
-  // createMathBuiltin: returns an object of math functions (expects VM to call them)
-  function createMathBuiltin(vm){
-    return {
-      sin: function(args){ return Math.sin(Number((args && args[0])||0)); },
-      cos: function(args){ return Math.cos(Number((args && args[0])||0)); },
-      tan: function(args){ return Math.tan(Number((args && args[0])||0)); },
-      sqrt: function(args){ return Math.sqrt(Number((args && args[0])||0)); },
-      pow: function(args){ return Math.pow(Number((args && args[0])||0), Number((args && args[1])||0)); },
-      floor: function(args){ return Math.floor(Number((args && args[0])||0)); },
-      ceil: function(args){ return Math.ceil(Number((args && args[0])||0)); },
-      abs: function(args){ return Math.abs(Number((args && args[0])||0)); },
-      random: function(){ return Math.random(); }
-    };
-  }
-
-  // createOsBuiltin: small OS helpers
-  function createOsBuiltin(vm){
-    var os = require ? require('os') : null;
-    return {
-      platform: function(){ return (typeof process !== 'undefined' && process.platform) ? process.platform : null; },
-      homedir: function(){ return os ? os.homedir() : null; },
-      tmpdir: function(){ return os ? os.tmpdir() : null; },
-      exit: function(args){ var code = Number((args && args[0])||0); if(typeof process !== 'undefined' && process.exit) process.exit(code); },
-      env: function(){ return (typeof process !== 'undefined' && process.env) ? process.env : {}; },
-      cwd: function(){ return (typeof process !== 'undefined' && process.cwd) ? process.cwd() : '.'; },
-      chdir: function(args){ if(typeof process !== 'undefined' && process.chdir) process.chdir(String((args && args[0])||'.')); return null; }
-    };
-  }
-
-  // Export the factories so they can be registered manually if automatic registration is not possible.
-  try{
-    if(typeof module !== 'undefined' && module.exports){
-      module.exports.__vexon_patches = module.exports.__vexon_patches || {};
-      module.exports.__vexon_patches.createMathBuiltin = createMathBuiltin;
-      module.exports.__vexon_patches.createOsBuiltin = createOsBuiltin;
-    }
-  }catch(e){ /* ignore */ }
-
-  // If a createGuiBuiltin function exists in the scope, wrap it to inject Slider/Checkbox constructors
-  try{
-    if(typeof createGuiBuiltin === 'function'){
-      var _origCreateGuiBuiltin = createGuiBuiltin;
-      createGuiBuiltin = function(vm){
-        var gui = _origCreateGuiBuiltin(vm);
-        if(!gui.Slider){
-          // Minimal Slider constructor (stateful object compatible with basic usage)
-          gui.Slider = function(min, max, value){
-            var _min = (typeof min === 'number')?min:0;
-            var _max = (typeof max === 'number')?max:100;
-            var _val = (typeof value === 'number')?value: _min;
-            var _handlers = {};
-            return {
-              _type: 'slider',
-              getValue: function(){ return _val; },
-              setValue: function(v){ _val = Number(v); },
-              setRange: function(a,b){ _min = a; _max = b; },
-              on: function(evt, fn){ if(typeof fn === 'function') _handlers[evt]=fn; },
-              _emit: function(evt,arg){ if(evt==='change'){ _val = Number(arg); } if(_handlers[evt]) try{ _handlers[evt](arg); }catch(e){} },
-              setStyle: function(){},
-            };
-          };
-        }
-        if(!gui.Checkbox){
-          gui.Checkbox = function(initial){
-            var _checked = !!initial;
-            var _handlers = {};
-            return {
-              _type: 'checkbox',
-              isChecked: function(){ return _checked; },
-              setChecked: function(v){ _checked = !!v; },
-              on: function(evt, fn){ if(typeof fn === 'function') _handlers[evt]=fn; },
-              _emit: function(evt,arg){ if(evt==='change'){ _checked = !!arg; } if(_handlers[evt]) try{ _handlers[evt](arg); }catch(e){} },
-              setStyle: function(){},
-            };
-          };
-        }
-        return gui;
-      };
-    }
-  }catch(e){
-    // ignore if scoping prevents patching
-  }
-
-  // Informational: attach to global for inspection if available
-  try{ if(typeof global !== 'undefined') { global.__vexon_patch_info = global.__vexon_patch_info || {}; global.__vexon_patch_info.corePatched = true; } }catch(e){}
-})();
-
-
-// --- injected: VM prototype helper for formatted runtime errors ---
-if(typeof VM !== 'undefined'){
-  VM.prototype._formatRuntimeError = function(err, meta){
-    return __vexon_format_runtime_error(err, meta);
+function createMathBuiltin(vm) {
+  return {
+    sin: { builtin: true, call: (args) => Math.sin(Number(args[0] || 0)) },
+    cos: { builtin: true, call: (args) => Math.cos(Number(args[0] || 0)) },
+    tan: { builtin: true, call: (args) => Math.tan(Number(args[0] || 0)) },
+    sqrt: { builtin: true, call: (args) => Math.sqrt(Number(args[0] || 0)) },
+    pow: { builtin: true, call: (args) => Math.pow(Number(args[0] || 0), Number(args[1] || 0)) },
+    floor: { builtin: true, call: (args) => Math.floor(Number(args[0] || 0)) },
+    ceil: { builtin: true, call: (args) => Math.ceil(Number(args[0] || 0)) },
+    abs: { builtin: true, call: (args) => Math.abs(Number(args[0] || 0)) },
+    random: { builtin: true, call: () => Math.random() },
+    PI: 3.14159265359
   };
 }
+
+/* ================ OS BUILTIN ================ */
+
+function createOsBuiltin(vm) {
+  const os = require('os');
+  return {
+    platform: { builtin: true, call: () => process.platform },
+    homedir: { builtin: true, call: () => os.homedir() },
+    tmpdir: { builtin: true, call: () => os.tmpdir() },
+    exit: { builtin: true, call: (args) => process.exit(Number(args[0] || 0)) },
+    env: { builtin: true, call: () => process.env },
+    cwd: { builtin: true, call: () => process.cwd() },
+    chdir: { builtin: true, call: (args) => { process.chdir(String(args[0] || '.')); return null; } }
+  };
+}
+
+/* ================ HTTP BUILTIN ================ */
+
+function createHttpBuiltin(vm) {
+  class VexonHttpServer {
+    constructor(options = {}) {
+      this.routes = new Map();
+      this.middleware = [];
+      this.staticDirs = [];
+      this.server = null;
+      this.port = options.port || 3000;
+      this.host = options.host || 'localhost';
+    }
+
+    use(handler) { this.middleware.push(handler); }
+
+    route(method, path, handler) {
+      const key = `${method.toUpperCase()}:${path}`;
+      this.routes.set(key, handler);
+    }
+
+    get(path, handler) { this.route('GET', path, handler); }
+    post(path, handler) { this.route('POST', path, handler); }
+    put(path, handler) { this.route('PUT', path, handler); }
+    delete(path, handler) { this.route('DELETE', path, handler); }
+    patch(path, handler) { this.route('PATCH', path, handler); }
+
+    static(dirPath) {
+      this.staticDirs.push(path.resolve(dirPath));
+    }
+
+    async handleRequest(req, res) {
+      const parsedUrl = url.parse(req.url, true);
+      const pathname = parsedUrl.pathname;
+      const query = parsedUrl.query;
+
+      const request = {
+        method: req.method,
+        url: req.url,
+        path: pathname,
+        query: query,
+        headers: req.headers,
+        body: null,
+        params: {}
+      };
+
+      const response = {
+        statusCode: 200,
+        headers: {},
+        body: null,
+        
+        status(code) { this.statusCode = code; return this; },
+        header(name, value) { this.headers[name] = value; return this; },
+        json(data) { this.header('Content-Type', 'application/json'); this.body = JSON.stringify(data); return this; },
+        text(data) { this.header('Content-Type', 'text/plain'); this.body = String(data); return this; },
+        html(data) { this.header('Content-Type', 'text/html'); this.body = String(data); return this; },
+        send(data) { return typeof data === 'object' ? this.json(data) : this.text(data); },
+        redirect(url) { this.status(302).header('Location', url); return this; },
+        
+        sendFile(filePath) {
+          try {
+            const fullPath = path.resolve(filePath);
+            const content = fs.readFileSync(fullPath);
+            const ext = path.extname(fullPath);
+            const mimeTypes = {
+              '.html': 'text/html', '.css': 'text/css', '.js': 'application/javascript',
+              '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg',
+              '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.svg': 'image/svg+xml',
+              '.ico': 'image/x-icon', '.txt': 'text/plain', '.pdf': 'application/pdf'
+            };
+            this.header('Content-Type', mimeTypes[ext] || 'application/octet-stream');
+            this.body = content;
+            return this;
+          } catch (e) {
+            this.status(404).text('File not found');
+            return this;
+          }
+        }
+      };
+
+      try {
+        if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
+          request.body = await this.parseBody(req);
+        }
+
+        for (const mw of this.middleware) {
+          const continueProcessing = await vm.callFunction(mw, [request, response]);
+          if (continueProcessing === false) {
+            return this.sendResponse(res, response);
+          }
+        }
+
+        for (const staticDir of this.staticDirs) {
+          const filePath = path.join(staticDir, pathname);
+          if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+            response.sendFile(filePath);
+            return this.sendResponse(res, response);
+          }
+        }
+
+        let handler = null;
+        let routeKey = `${req.method}:${pathname}`;
+        
+        if (this.routes.has(routeKey)) {
+          handler = this.routes.get(routeKey);
+        } else {
+          for (const [key, h] of this.routes.entries()) {
+            const [method, pattern] = key.split(':');
+            if (method === req.method) {
+              const params = this.matchRoute(pattern, pathname);
+              if (params) {
+                request.params = params;
+                handler = h;
+                break;
+              }
+            }
+          }
+        }
+
+        if (handler) {
+          await vm.callFunction(handler, [request, response]);
+        } else {
+          response.status(404).text('Not Found');
+        }
+
+        this.sendResponse(res, response);
+      } catch (err) {
+        console.error('Request handling error:', err);
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end('Internal Server Error');
+      }
+    }
+
+    matchRoute(pattern, pathname) {
+      const patternParts = pattern.split('/').filter(p => p);
+      const pathParts = pathname.split('/').filter(p => p);
+      
+      if (patternParts.length !== pathParts.length) return null;
+      
+      const params = {};
+      for (let i = 0; i < patternParts.length; i++) {
+        const patternPart = patternParts[i];
+        const pathPart = pathParts[i];
+        if (patternPart.startsWith(':')) {
+          params[patternPart.slice(1)] = pathPart;
+        } else if (patternPart !== pathPart) {
+          return null;
+        }
+      }
+      return params;
+    }
+
+    parseBody(req) {
+      return new Promise((resolve, reject) => {
+        let body = '';
+        req.on('data', chunk => { body += chunk.toString(); });
+        req.on('end', () => {
+          const contentType = req.headers['content-type'] || '';
+          if (contentType.includes('application/json')) {
+            try { resolve(JSON.parse(body)); }
+            catch (e) { resolve(body); }
+          } else if (contentType.includes('application/x-www-form-urlencoded')) {
+            resolve(querystring.parse(body));
+          } else {
+            resolve(body);
+          }
+        });
+        req.on('error', reject);
+      });
+    }
+
+    sendResponse(res, response) {
+      res.writeHead(response.statusCode, response.headers);
+      res.end(response.body || '');
+    }
+
+    listen(callback) {
+      this.server = http.createServer((req, res) => {
+        this.handleRequest(req, res);
+      });
+      
+      this.server.listen(this.port, this.host, () => {
+        console.log(`🚀 Server running at http://${this.host}:${this.port}/`);
+        if (callback) vm.callFunction(callback, []);
+      });
+      
+      return this;
+    }
+
+    close() {
+      if (this.server) this.server.close();
+    }
+  }
+
+  async function makeRequest(method, url, options = {}) {
+    return new Promise((resolve, reject) => {
+      const parsedUrl = new URL(url);
+      const isHttps = parsedUrl.protocol === 'https:';
+      const lib = isHttps ? https : http;
+      
+      const reqOptions = {
+        hostname: parsedUrl.hostname,
+        port: parsedUrl.port || (isHttps ? 443 : 80),
+        path: parsedUrl.pathname + parsedUrl.search,
+        method: method.toUpperCase(),
+        headers: options.headers || {}
+      };
+      
+      const req = lib.request(reqOptions, (res) => {
+        const chunks = [];
+        res.on('data', chunk => chunks.push(chunk));
+        res.on('end', () => {
+          const body = Buffer.concat(chunks).toString('utf-8');
+          let parsed = null;
+          const contentType = res.headers['content-type'] || '';
+          if (contentType.includes('application/json')) {
+            try { parsed = JSON.parse(body); } catch (e) {}
+          }
+          resolve({ status: res.statusCode, headers: res.headers, body: body, json: parsed });
+        });
+      });
+      
+      req.on('error', reject);
+      
+      if (options.body) {
+        const body = typeof options.body === 'string' ? options.body : JSON.stringify(options.body);
+        req.write(body);
+      }
+      
+      req.end();
+    });
+  }
+
+  return {
+    Server: { builtin: true, call: (args) => new VexonHttpServer(args[0] || {}) },
+    get: { builtin: true, call: (args) => makeRequest('GET', args[0], args[1]) },
+    post: { builtin: true, call: (args) => makeRequest('POST', args[0], args[1]) },
+    put: { builtin: true, call: (args) => makeRequest('PUT', args[0], args[1]) },
+    delete: { builtin: true, call: (args) => makeRequest('DELETE', args[0], args[1]) },
+    patch: { builtin: true, call: (args) => makeRequest('PATCH', args[0], args[1]) },
+    request: { builtin: true, call: (args) => makeRequest(args[0], args[1], args[2]) },
+    urlParse: { builtin: true, call: (args) => {
+      const parsed = url.parse(args[0], true);
+      return {
+        protocol: parsed.protocol, host: parsed.host, hostname: parsed.hostname,
+        port: parsed.port, pathname: parsed.pathname, search: parsed.search,
+        query: parsed.query, hash: parsed.hash
+      };
+    }},
+    urlFormat: { builtin: true, call: (args) => url.format(args[0]) },
+    queryParse: { builtin: true, call: (args) => querystring.parse(args[0]) },
+    queryStringify: { builtin: true, call: (args) => querystring.stringify(args[0]) }
+  };
+}
+
+/* ================ EXPORTS ================ */
+
+module.exports = { Lexer, Parser, Compiler, VM, Op, TypeChecker };
