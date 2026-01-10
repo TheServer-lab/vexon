@@ -1,0 +1,48 @@
+use gui
+use math
+
+let win = gui.Window("Bouncing Ball", 500, 400)
+let canvas = gui.Canvas(500, 400)
+
+let x = 250
+let y = 200
+let dx = 3
+let dy = 2
+let radius = 20
+
+fn animate() {
+  // Clear canvas
+  canvas.clear()
+  
+  // Draw background
+  canvas.drawRect(0, 0, 500, 400, "#001122")
+  
+  // Draw ball with trail effect
+  canvas.drawCircle(x, y, radius, "#00FF88")
+  canvas.drawCircle(x, y, radius - 5, "#00FFFF")
+  
+  // Update position
+  x = x + dx
+  y = y + dy
+  
+  // Bounce off walls
+  if x > 480 {
+    dx = -3
+  }
+  if x < 20 {
+    dx = 3
+  }
+  if y > 380 {
+    dy = -2
+  }
+  if y < 20 {
+    dy = 2
+  }
+  
+  // Schedule next frame
+  setTimeout(animate, 16)
+}
+
+win.add(canvas)
+win.show()
+animate()

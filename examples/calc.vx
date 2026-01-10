@@ -1,0 +1,26 @@
+fn add(a, b) {
+  return a + b
+}
+
+fn subtract(a, b) {
+  return a - b
+}
+
+fn multiply(a, b) {
+  return a * b
+}
+
+fn divide(a, b) {
+  if b == 0 {
+    print("Error: Division by zero!")
+    return null
+  }
+  return a / b
+}
+
+print("Calculator Demo")
+print("5 + 3 =", add(5, 3))
+print("10 - 4 =", subtract(10, 4))
+print("6 * 7 =", multiply(6, 7))
+print("15 / 3 =", divide(15, 3))
+print("10 / 0 =", divide(10, 0))

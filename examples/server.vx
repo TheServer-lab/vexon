@@ -1,0 +1,68 @@
+use http
+
+let server = http.Server({ port: 3000 })
+
+// Home page
+server.get("/", fn(req, res) {
+  res.html("
+    <html>
+      <head><title>Vexon Server</title></head>
+      <body style='font-family: Arial; margin: 40px;'>
+        <h1>Welcome to Vexon Web Server!</h1>
+        <p>Try these endpoints:</p>
+        <ul>
+          <li><a href='/api/hello'>/api/hello</a> - JSON response</li>
+          <li><a href='/api/time'>/api/time</a> - Current time</li>
+          <li><a href='/api/calc?a=5&b=3'>/api/calc?a=5&b=3</a> - Calculator</li>
+        </ul>
+      </body>
+    </html>
+  ")
+})
+
+// JSON API
+server.get("/api/hello", fn(req, res) {
+  res.json({
+    message: "Hello from Vexon!",
+    version: "0.4.1"
+  })
+})
+
+// Time endpoint
+server.get("/api/time", fn(req, res) {
+  res.json({
+    timestamp: time(),
+    readable: "Current server time"
+  })
+})
+
+// Calculator endpoint
+server.get("/api/calc", fn(req, res) {
+  let a = toString(req.query.a)
+  let b = toString(req.query.b)
+  
+  // Convert to numbers
+  let numA = 0
+  let numB = 0
+  
+  // Simple string to number conversion
+  if a != "undefined" {
+    numA = json_decode(a)
+  }
+  if b != "undefined" {
+    numB = json_decode(b)
+  }
+  
+  res.json({
+    a: numA,
+    b: numB,
+    sum: numA + numB,
+    difference: numA - numB,
+    product: numA * numB
+  })
+})
+
+server.listen(fn() {
+  print("🚀 Server running at http://localhost:3000")
+  print("Press Ctrl+C to stop")
+})

@@ -1,0 +1,49 @@
+use math
+
+print("Math Demo")
+print("")
+
+// Fibonacci
+fn fibonacci(n) {
+  if n <= 1 {
+    return n
+  }
+  return fibonacci(n - 1) + fibonacci(n - 2)
+}
+
+print("Fibonacci sequence:")
+for i in range(10) {
+  print("fib(" + toString(i) + ") =", fibonacci(i))
+}
+
+print("")
+
+// Prime numbers
+fn isPrime(n) {
+  if n < 2 {
+    return false
+  }
+  for i in range(2, n) {
+    if n % i == 0 {
+      return false
+    }
+  }
+  return true
+}
+
+print("Prime numbers up to 30:")
+for i in range(2, 31) {
+  if isPrime(i) {
+    print(i)
+  }
+}
+
+print("")
+
+// Math functions
+print("Math functions:")
+print("sin(0) =", math.sin(0))
+print("cos(0) =", math.cos(0))
+print("sqrt(16) =", math.sqrt(16))
+print("pow(2, 8) =", math.pow(2, 8))
+print("PI =", math.PI)

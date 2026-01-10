@@ -1,0 +1,41 @@
+print("=== Vexon Feature Test ===")
+print("")
+
+// Variables
+let name = "Vexon"
+let version = 0.41
+print("Language:", name, version)
+
+// Arrays
+let numbers = [1, 2, 3, 4, 5]
+print("Array:", numbers)
+print("Length:", len(numbers))
+
+// Objects
+let person = {
+  name: "Alice",
+  age: 30,
+  city: "NYC"
+}
+print("Object:", person)
+
+// Functions
+fn greet(name) {
+  return "Hello, " + name + "!"
+}
+print(greet("World"))
+
+// Loops
+print("Counting:")
+for i in range(1, 6) {
+  print("  ", i)
+}
+
+// Conditionals
+let x = 10
+if x > 5 {
+  print("x is greater than 5")
+}
+
+print("")
+print("✓ All basic features working!")

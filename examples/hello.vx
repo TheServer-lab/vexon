@@ -1,0 +1,6 @@
+print("Hello, Vexon!")
+print("Current time:", time())
+
+let name = "Alice"
+let age = 30
+print(name, "is", age, "years old")

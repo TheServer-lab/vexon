@@ -1,0 +1,73 @@
+class BankAccount {
+  fn init(owner, balance) {
+    this.owner = owner
+    this.balance = balance
+    this.transactions = []
+  }
+  
+  fn deposit(amount) {
+    this.balance = this.balance + amount
+    push(this.transactions, {
+      type deposit,
+      amount amount,
+      time time()
+    })
+    print(✓ Deposited, amount)
+    print(  New balance, this.balance)
+  }
+  
+  fn withdraw(amount) {
+    if amount  this.balance {
+      print(❌ Insufficient funds!)
+      return false
+    }
+    
+    this.balance = this.balance - amount
+    push(this.transactions, {
+      type withdrawal,
+      amount amount,
+      time time()
+    })
+    print(✓ Withdrew, amount)
+    print(  New balance, this.balance)
+    return true
+  }
+  
+  fn getBalance() {
+    return this.balance
+  }
+  
+  fn statement() {
+    print()
+    print(=== Account Statement ===)
+    print(Owner, this.owner)
+    print(Balance $ + toString(this.balance))
+    print()
+    print(Recent Transactions)
+    for tx in this.transactions {
+      if tx.type == deposit {
+        print(  + $ + toString(tx.amount), (deposit))
+      } else {
+        print(  - $ + toString(tx.amount), (withdrawal))
+      }
+    }
+    print(========================)
+  }
+}
+
+ Create account
+let account = BankAccount(Alice Johnson, 1000)
+
+print(Opening account for, account.owner)
+print(Starting balance, account.balance)
+print()
+
+ Perform transactions
+account.deposit(500)
+account.withdraw(200)
+account.withdraw(2000)   Should fail
+account.deposit(100)
+account.withdraw(50)
+
+ Show statement
+account.statement()

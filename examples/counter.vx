@@ -1,0 +1,41 @@
+use gui
+
+let win = gui.Window("Counter", 300, 200)
+
+let count = 0
+let label = gui.Label("Count: 0")
+
+let incButton = gui.Button("Increment")
+let decButton = gui.Button("Decrement")
+let resetButton = gui.Button("Reset")
+
+fn updateLabel() {
+  label.setText("Count: " + toString(count))
+}
+
+incButton.on("click", fn() {
+  count = count + 1
+  updateLabel()
+})
+
+decButton.on("click", fn() {
+  count = count - 1
+  updateLabel()
+})
+
+resetButton.on("click", fn() {
+  count = 0
+  updateLabel()
+})
+
+let vbox = gui.VBox()
+vbox.add(label)
+
+let hbox = gui.HBox()
+hbox.add(decButton)
+hbox.add(incButton)
+hbox.add(resetButton)
+
+vbox.add(hbox)
+win.add(vbox)
+win.show()

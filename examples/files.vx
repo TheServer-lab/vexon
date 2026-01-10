@@ -1,0 +1,39 @@
+print("File Operations Demo")
+print("")
+
+// Write to file
+write("test.txt", "Hello from Vexon!\nThis is line 2.\nLine 3 here.")
+print("✓ Created test.txt")
+
+// Read file
+let content = read("test.txt")
+print("File contents:")
+print(content)
+print("")
+
+// Append to file
+append("test.txt", "\nAppended line 4!")
+print("✓ Appended to test.txt")
+
+// Read again
+print("Updated contents:")
+print(read("test.txt"))
+print("")
+
+// Check if file exists
+if exists("test.txt") {
+  print("✓ test.txt exists")
+}
+
+// List files
+print("")
+print("Files in current directory:")
+let files = list(".")
+for file in files {
+  print("  -", file)
+}
+
+// Clean up
+delete("test.txt")
+print("")
+print("✓ Deleted test.txt")

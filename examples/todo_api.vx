@@ -1,0 +1,100 @@
+use http
+
+let todos = []
+let nextId = 1
+
+let server = http.Server({ port: 8080 })
+
+// Logging middleware
+server.use(fn(req, res) {
+  print("[" + toString(time()) + "]", req.method, req.path)
+  return true
+})
+
+// Get all todos
+server.get("/api/todos", fn(req, res) {
+  res.json(todos)
+})
+
+// Create todo
+server.post("/api/todos", fn(req, res) {
+  let todo = req.body
+  todo.id = nextId
+  todo.completed = false
+  nextId = nextId + 1
+  
+  push(todos, todo)
+  print("Created todo:", todo.id, "-", todo.text)
+  
+  res.status(201).json(todo)
+})
+
+// Get specific todo
+server.get("/api/todos/:id", fn(req, res) {
+  let id = req.params.id
+  let found = null
+  
+  for todo in todos {
+    if toString(todo.id) == id {
+      found = todo
+      break
+    }
+  }
+  
+  if found != null {
+    res.json(found)
+  } else {
+    res.status(404).json({ error: "Todo not found" })
+  }
+})
+
+// Update todo
+server.put("/api/todos/:id", fn(req, res) {
+  let id = req.params.id
+  let updated = false
+  
+  for todo in todos {
+    if toString(todo.id) == id {
+      todo.text = req.body.text
+      todo.completed = req.body.completed
+      updated = true
+      res.json(todo)
+      break
+    }
+  }
+  
+  if updated == false {
+    res.status(404).json({ error: "Todo not found" })
+  }
+})
+
+// Delete todo
+server.delete("/api/todos/:id", fn(req, res) {
+  let id = req.params.id
+  let newTodos = []
+  let deleted = false
+  
+  for todo in todos {
+    if toString(todo.id) != id {
+      push(newTodos, todo)
+    } else {
+      deleted = true
+    }
+  }
+  
+  todos = newTodos
+  
+  if deleted {
+    res.json({ success: true })
+  } else {
+    res.status(404).json({ error: "Todo not found" })
+  }
+})
+
+server.listen(fn() {
+  print("📝 Todo API running on http://localhost:8080")
+  print("")
+  print("Try these commands:")
+  print('  curl http://localhost:8080/api/todos')
+  print('  curl -X POST http://localhost:8080/api/todos -H "Content-Type: application/json" -d "{\\"text\\":\\"Learn Vexon\\"}"')
+})
