@@ -49,8 +49,12 @@ class TypeChecker {
   }
 
   check() {
-    for (const stmt of this.ast) {
-      this.checkStmt(stmt);
+    try {
+      for (const stmt of this.ast) {
+        this.checkStmt(stmt);
+      }
+    } catch (e) {
+      this.error(`Type checking failed: ${e.message}`);
     }
     
     return {
@@ -87,6 +91,8 @@ class TypeChecker {
   }
 
   checkStmt(stmt) {
+    if (!stmt) return 'any';
+    
     switch (stmt.kind) {
       case 'let': return this.checkLetStmt(stmt);
       case 'fn': return this.checkFnStmt(stmt);
@@ -97,6 +103,10 @@ class TypeChecker {
       case 'for': return this.checkForStmt(stmt);
       case 'return': return this.checkReturnStmt(stmt);
       case 'expr': return this.checkExpr(stmt.expr);
+      case 'use': return 'any';
+      case 'import': return 'any';
+      case 'try': return this.checkTryStmt(stmt);
+      case 'throw': return this.checkThrowStmt(stmt);
       default: return 'any';
     }
   }
@@ -119,7 +129,9 @@ class TypeChecker {
     );
     const returnType = stmt.returnType || 'any';
     
-    this.functions.set(stmt.name, { params: paramTypes, returns: returnType });
+    if (stmt.name) {
+      this.functions.set(stmt.name, { params: paramTypes, returns: returnType });
+    }
     
     this.pushScope();
     
@@ -185,6 +197,7 @@ class TypeChecker {
     }
     for (const thenStmt of stmt.then) this.checkStmt(thenStmt);
     for (const elseStmt of stmt.otherwise) this.checkStmt(elseStmt);
+    return 'null';
   }
 
   checkWhileStmt(stmt) {
@@ -193,6 +206,7 @@ class TypeChecker {
       this.warn(`Condition should be boolean, got ${condType}`, stmt.loc);
     }
     for (const bodyStmt of stmt.body) this.checkStmt(bodyStmt);
+    return 'null';
   }
 
   checkForStmt(stmt) {
@@ -205,6 +219,7 @@ class TypeChecker {
     this.setType(stmt.iterator, elementType);
     for (const bodyStmt of stmt.body) this.checkStmt(bodyStmt);
     this.popScope();
+    return 'null';
   }
 
   checkReturnStmt(stmt) {
@@ -212,12 +227,24 @@ class TypeChecker {
       if (this.currentReturnType && this.currentReturnType !== 'null' && this.currentReturnType !== 'any') {
         this.error(`Function should return ${this.currentReturnType}, got null`, stmt.loc);
       }
-      return;
+      return 'null';
     }
     const returnType = this.checkExpr(stmt.expr);
     if (this.currentReturnType && !this.isCompatible(returnType, this.currentReturnType)) {
       this.error(`Return type mismatch: expected ${this.currentReturnType}, got ${returnType}`, stmt.loc);
     }
+    return returnType;
+  }
+
+  checkTryStmt(stmt) {
+    for (const st of stmt.tryBody) this.checkStmt(st);
+    for (const st of stmt.catchBody) this.checkStmt(st);
+    return 'null';
+  }
+
+  checkThrowStmt(stmt) {
+    this.checkExpr(stmt.expr);
+    return 'null';
   }
 
   checkExpr(expr) {
@@ -236,6 +263,7 @@ class TypeChecker {
       case 'call': return this.checkCallExpr(expr);
       case 'index': return 'any';
       case 'prop': return 'any';
+      case 'fn': return 'function';
       default: return 'any';
     }
   }
@@ -278,7 +306,8 @@ class TypeChecker {
   }
 
   checkUnaryExpr(expr) {
-    return expr.op === '!' ? 'boolean' : this.checkExpr(expr.expr);
+    const exprType = this.checkExpr(expr.expr);
+    return expr.op === '!' ? 'boolean' : exprType;
   }
 
   checkCallExpr(expr) {
@@ -346,7 +375,7 @@ class TypeChecker {
       }
     }
     if (this.errors.length === 0 && this.warnings.length === 0) {
-      report += '\n✓ No type errors found\n';
+      report += '\n✅ No type errors found\n';
     }
     return report;
   }
@@ -425,13 +454,10 @@ class Lexer {
         continue;
       }
 
-      // 1. Add ` to the condition
       if (c === '"' || c === "'" || c === "`") {
         const q = this.next();
         let s = "";
         
-        // 2. This loop will now capture multiple lines because it 
-        // doesn't stop until it finds the matching backtick.
         while (!this.eof() && this.peek() !== q) {
           let ch = this.next();
           if (ch === "\\") {
@@ -605,12 +631,10 @@ class Parser {
     this.next(); // consume 'fn' or 'func'
     
     let name = null;
-    // Check if there is a name. If the next token isn't '(', it must be the name.
     if (this.peek().t === "id") {
       name = this.next().v;
     }
     
-    // Now look for the parameters '('
     if (!this.matchSymbol("(")) {
       throw new Error(this.formatTokenError(this.peek(), "expected ( after fn name or keyword"));
     }
@@ -629,7 +653,6 @@ class Parser {
       }
     }
 
-    // Manual block parsing logic compatible with Vexon 0.4.1
     if (!this.matchSymbol("{")) {
         throw new Error(this.formatTokenError(this.peek(), "function missing opening {"));
     }
@@ -747,12 +770,9 @@ class Parser {
       if (tk.t === "number") { this.next(); return { kind: "num", value: Number(tk.v) }; }
       if (tk.t === "string") { this.next(); return { kind: "str", value: tk.v }; }
     
-      // --- ADD THIS NEW BLOCK HERE ---
-      // This allows passing fn(...) { } as an argument
       if (tk.t === "keyword" && (tk.v === "fn" || tk.v === "func")) {
        return this.parseFn(); 
       }
-      // -------------------------------
 
       if (tk.t === "keyword" && (tk.v === "true" || tk.v === "false" || tk.v === "null")) {
       this.next();
@@ -1149,8 +1169,7 @@ class Compiler {
         for (const a of e.args) this.emitExpr(a);
         this.emit({ op: Op.CALL, arg: e.args.length });
         break;
-      } // Added missing closing brace for 'call' block
-      
+      }
       case "fn": {
         const subCompiler = new Compiler();
         const bytecode = subCompiler.compile(e.body, { omitHalt: true });
@@ -1711,15 +1730,37 @@ class VM {
             let full;
             if (path.isAbsolute(fileConst)) full = fileConst;
             else full = path.resolve(frame.baseDir || this.baseDir, fileConst);
+            
             if (this.importCache.has(full)) {
               this.push(this.importCache.get(full));
               break;
             }
-            if (!fs.existsSync(full)) {
-              if (fs.existsSync(full + ".vx")) full = full + ".vx";
-              else throw new Error("Import file not found: " + full);
+            
+            let foundPath = null;
+            if (fs.existsSync(full)) {
+              foundPath = full;
+            } else if (fs.existsSync(full + ".vx")) {
+              foundPath = full + ".vx";
+            } else if (fs.existsSync(full + ".js")) {
+              foundPath = full + ".js";
+            } else {
+              throw new Error(`Import file not found: ${full}`);
             }
-            const src = fs.readFileSync(full, "utf8");
+            
+            const src = fs.readFileSync(foundPath, "utf8");
+            
+            if (foundPath.endsWith('.js')) {
+              try {
+                delete require.cache[require.resolve(foundPath)];
+                const moduleObj = require(foundPath);
+                this.importCache.set(full, moduleObj);
+                this.push(moduleObj);
+              } catch (e) {
+                throw new Error(`Failed to import JavaScript module: ${e.message}`);
+              }
+              break;
+            }
+            
             const lexer = new Lexer(src);
             const tokens = lexer.lex();
             const parser = new Parser(tokens, src);
@@ -1727,10 +1768,15 @@ class VM {
             const compiler = new Compiler();
             const compiled = compiler.compile(stmts);
 
-            const childVM = new VM(compiled.consts, compiled.code, { baseDir: path.dirname(full), debug: this.debug });
+            const childVM = new VM(compiled.consts, compiled.code, { 
+              baseDir: path.dirname(foundPath), 
+              debug: this.debug 
+            });
+            
             for (const [k, v] of this.globals.entries()) {
               if (v && v.builtin) childVM.globals.set(k, v);
             }
+            
             await childVM.run();
 
             const moduleObj = {};
@@ -1863,11 +1909,14 @@ class VM {
           case Op.TRY_PUSH: {
             const catchIp = inst.arg;
             const stackHeight = this.stack.length;
+            if (!frame.tryStack) frame.tryStack = [];
             frame.tryStack.push({ catchIp, stackHeight });
             break;
           }
           case Op.TRY_POP: {
-            frame.tryStack.pop();
+            if (frame.tryStack && frame.tryStack.length > 0) {
+              frame.tryStack.pop();
+            }
             break;
           }
           case Op.THROW: {
@@ -1930,6 +1979,7 @@ class VM {
         }
         if (!handled) {
           console.error("❌ Vexon Runtime Error:", exObj.message);
+          if (err.stack && this.debug) console.error(err.stack);
           throw err;
         }
       }
@@ -2069,8 +2119,7 @@ function createGuiBuiltin(vm) {
     return {
       _id: id,
       _type: "hbox",
-      add(w) { if (w && w._id) children
-      .push(w._id); vm.__sendUI({ type: "noop" }, widgets); },
+      add(w) { if (w && w._id) children.push(w._id); vm.__sendUI({ type: "noop" }, widgets); },
       setStyle(obj) { mergeStyle(state, obj); vm.__sendUI({ type: "noop" }, widgets); }
     };
   }
