@@ -425,17 +425,28 @@ class Lexer {
         continue;
       }
 
-      if (c === '"' || c === "'") {
+      // 1. Add ` to the condition
+      if (c === '"' || c === "'" || c === "`") {
         const q = this.next();
         let s = "";
+        
+        // 2. This loop will now capture multiple lines because it 
+        // doesn't stop until it finds the matching backtick.
         while (!this.eof() && this.peek() !== q) {
           let ch = this.next();
           if (ch === "\\") {
             const n = this.next();
-            if (n === "n") s += "\n"; else if (n === "t") s += "\t"; else s += n;
-          } else s += ch;
+            if (n === "n") s += "\n"; 
+            else if (n === "t") s += "\t"; 
+            else if (n === "r") s += "\r";
+            else s += n;
+          } else {
+            s += ch;
+          }
         }
+        
         if (this.peek() === q) this.next();
+        
         out.push(this.makeToken("string", s, startLine, startCol, startIdx));
         continue;
       }
@@ -590,23 +601,44 @@ class Parser {
     return { kind: "import", file, alias };
   }
 
-  parseFn() {
-    this.next();
-    if (this.peek().t !== "id") throw new Error(this.formatTokenError(this.peek(), "fn expects a name"));
-    const name = this.next().v;
-    if (!this.matchSymbol("(")) throw new Error(this.formatTokenError(this.peek(), "fn missing ("));
+ parseFn() {
+    this.next(); // consume 'fn' or 'func'
+    
+    let name = null;
+    // Check if there is a name. If the next token isn't '(', it must be the name.
+    if (this.peek().t === "id") {
+      name = this.next().v;
+    }
+    
+    // Now look for the parameters '('
+    if (!this.matchSymbol("(")) {
+      throw new Error(this.formatTokenError(this.peek(), "expected ( after fn name or keyword"));
+    }
+    
     const params = [];
     if (!this.matchSymbol(")")) {
       while (true) {
-        if (this.peek().t !== "id") throw new Error(this.formatTokenError(this.peek(), "fn param must be identifier"));
+        if (this.peek().t !== "id") {
+          throw new Error(this.formatTokenError(this.peek(), "expected parameter name"));
+        }
         params.push(this.next().v);
         if (this.matchSymbol(")")) break;
-        if (!this.matchSymbol(",")) throw new Error(this.formatTokenError(this.peek(), "expected , or )"));
+        if (!this.matchSymbol(",")) {
+          throw new Error(this.formatTokenError(this.peek(), "expected , or ) in params"));
+        }
       }
     }
-    if (!this.matchSymbol("{")) throw new Error(this.formatTokenError(this.peek(), "fn missing {"));
+
+    // Manual block parsing logic compatible with Vexon 0.4.1
+    if (!this.matchSymbol("{")) {
+        throw new Error(this.formatTokenError(this.peek(), "function missing opening {"));
+    }
+    
     const body = [];
-    while (!this.matchSymbol("}")) body.push(this.parseStmt());
+    while (!this.matchSymbol("}")) {
+        body.push(this.parseStmt());
+    }
+    
     return { kind: "fn", name, params, body };
   }
 
@@ -710,11 +742,19 @@ class Parser {
   }
 
   parsePrimary() {
-    const tk = this.peek();
-    if (!tk) throw new Error("Unexpected end of input in primary");
-    if (tk.t === "number") { this.next(); return { kind: "num", value: Number(tk.v) }; }
-    if (tk.t === "string") { this.next(); return { kind: "str", value: tk.v }; }
-    if (tk.t === "keyword" && (tk.v === "true" || tk.v === "false" || tk.v === "null")) {
+      const tk = this.peek();
+      if (!tk) throw new Error("Unexpected end of input in primary");
+      if (tk.t === "number") { this.next(); return { kind: "num", value: Number(tk.v) }; }
+      if (tk.t === "string") { this.next(); return { kind: "str", value: tk.v }; }
+    
+      // --- ADD THIS NEW BLOCK HERE ---
+      // This allows passing fn(...) { } as an argument
+      if (tk.t === "keyword" && (tk.v === "fn" || tk.v === "func")) {
+       return this.parseFn(); 
+      }
+      // -------------------------------
+
+      if (tk.t === "keyword" && (tk.v === "true" || tk.v === "false" || tk.v === "null")) {
       this.next();
       if (tk.v === "true") return { kind: "bool", value: true };
       if (tk.v === "false") return { kind: "bool", value: false };
@@ -1109,7 +1149,20 @@ class Compiler {
         for (const a of e.args) this.emitExpr(a);
         this.emit({ op: Op.CALL, arg: e.args.length });
         break;
+      } // Added missing closing brace for 'call' block
+      
+      case "fn": {
+        const subCompiler = new Compiler();
+        const bytecode = subCompiler.compile(e.body, { omitHalt: true });
+        const funcObj = { 
+          params: e.params, 
+          code: bytecode.code, 
+          consts: bytecode.consts 
+        };
+        this.emit({ op: Op.CONST, arg: this.addConst(funcObj) });
+        break;
       }
+
       default:
         throw new Error("Unsupported expr kind: " + e.kind);
     }
