@@ -1,6 +1,6 @@
 {
   "name": "vexonlang",
-  "version": "0.4.1",
+  "version": "0.4.4",
   "description": "Vexon — an experimental programming language and runtime built on Node.js",
   "author": "Sourasish Das",
   "license": "SEE LICENSE IN LICENSE",
