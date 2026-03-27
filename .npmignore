@@ -1,0 +1,28 @@
+# Icons / binaries (large, not needed at runtime)
+*.ico
+vexon_icon.ico
+
+# GUI examples (require Electron, not needed for the core runtime)
+gui/
+
+# Learning docs (useful on GitHub, not in the npm package)
+learn/
+
+# Dev / build artifacts
+node_modules/
+*.log
+.env
+
+# Packaging tools output
+dist/
+build/
+out/
+
+# Editor / OS files
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Misc
+how to run.txt
+requirements.txt

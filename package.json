@@ -1,0 +1,46 @@
+{
+  "name": "vexonlang",
+  "version": "0.4.1",
+  "description": "Vexon — an experimental programming language and runtime built on Node.js",
+  "author": "Sourasish Das",
+  "license": "SEE LICENSE IN LICENSE",
+  "homepage": "https://github.com/TheServer-lab/vexon",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TheServer-lab/vexon.git"
+  },
+  "bugs": {
+    "url": "https://github.com/TheServer-lab/vexon/issues"
+  },
+  "main": "./core/vexon_core.js",
+  "bin": {
+    "vx": "./core/vexon_cli.js"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "keywords": [
+    "vexon",
+    "language",
+    "interpreter",
+    "scripting",
+    "runtime",
+    "programming-language"
+  ],
+  "dependencies": {
+    "colors": "^1.4.0",
+    "node-fetch": "^2.7.0",
+    "prompt-sync": "^4.2.0",
+    "readline-sync": "^1.4.10"
+  },
+  "devDependencies": {
+    "electron": "^29.0.0",
+    "electron-builder": "^24.0.0",
+    "nodemon": "^3.0.0",
+    "pkg": "^5.8.0"
+  },
+  "scripts": {
+    "start": "node core/vexon_cli.js",
+    "dev": "nodemon core/vexon_cli.js"
+  }
+}
