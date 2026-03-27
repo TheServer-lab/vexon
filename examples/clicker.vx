@@ -1,0 +1,299 @@
+use http
+use math
+
+let server = http.Server({ port: 4000 })
+
+// ── Game state ─────────────────────────────────────────────
+let clicks      = 0
+let totalClicks = 0
+let cps         = 0   // clicks per second (from upgrades)
+
+// Upgrades: name, cost, cpsBoost, count
+let upgrades = [
+  { name: "Cursor",       cost: 10,    cps: 0.1,  count: 0 },
+  { name: "Grandma",      cost: 100,   cps: 0.5,  count: 0 },
+  { name: "Cookie Farm",  cost: 500,   cps: 2,    count: 0 },
+  { name: "Cookie Mine",  cost: 2000,  cps: 8,    count: 0 },
+  { name: "Cookie Lab",   cost: 10000, cps: 30,   count: 0 }
+]
+
+fn recalcCps() {
+  cps = 0
+  for u in upgrades {
+    cps = cps + (u.cps * u.count)
+  }
+}
+
+// ── Tick: auto-add cps every second ───────────────────────
+fn tick() {
+  if cps > 0 {
+    clicks = clicks + cps
+    totalClicks = totalClicks + cps
+  }
+  setTimeout(tick, 1000)
+}
+setTimeout(tick, 1000)
+
+// ── HTML page ──────────────────────────────────────────────
+let PAGE = "<!DOCTYPE html>
+<html lang='en'>
+<head>
+  <meta charset='UTF-8'>
+  <title>Vexon Clicker</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #1a0a2e;
+      color: #e0d0ff;
+      font-family: 'Segoe UI', sans-serif;
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* Left panel */
+    #left {
+      width: 280px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      border-right: 1px solid #3a2060;
+      padding: 24px;
+      gap: 16px;
+    }
+    #score {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #c084fc;
+      text-align: center;
+    }
+    #cps-display {
+      font-size: 0.9rem;
+      color: #a78bfa;
+      text-align: center;
+    }
+    #cookie {
+      width: 180px;
+      height: 180px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 35%, #f59e0b, #b45309);
+      cursor: pointer;
+      box-shadow: 0 0 40px #f59e0b55;
+      transition: transform 0.08s, box-shadow 0.08s;
+      border: 4px solid #fbbf24;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 80px;
+      user-select: none;
+    }
+    #cookie:active {
+      transform: scale(0.92);
+      box-shadow: 0 0 20px #f59e0b33;
+    }
+    #total {
+      font-size: 0.8rem;
+      color: #7c3aed;
+    }
+
+    /* Right panel */
+    #right {
+      flex: 1;
+      padding: 24px;
+      overflow-y: auto;
+    }
+    h2 {
+      font-size: 1.1rem;
+      color: #a78bfa;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      margin-bottom: 16px;
+    }
+    .upgrade {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #2d1b4e;
+      border: 1px solid #4c2889;
+      border-radius: 12px;
+      padding: 14px 18px;
+      margin-bottom: 10px;
+      transition: background 0.2s, border 0.2s;
+    }
+    .upgrade.affordable {
+      border-color: #7c3aed;
+      background: #3b1f6a;
+    }
+    .upgrade-info { display: flex; flex-direction: column; gap: 4px; }
+    .upgrade-name { font-weight: 600; font-size: 1rem; color: #ddd6fe; }
+    .upgrade-desc { font-size: 0.78rem; color: #8b5cf6; }
+    .upgrade-count {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: #c084fc;
+      min-width: 40px;
+      text-align: center;
+    }
+    .buy-btn {
+      background: #5b21b6;
+      color: #e9d5ff;
+      border: none;
+      border-radius: 8px;
+      padding: 8px 16px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .buy-btn:hover { background: #6d28d9; }
+    .buy-btn:disabled { background: #2d1b4e; color: #4c2889; cursor: not-allowed; }
+
+    /* Floaty click text */
+    .floaty {
+      position: fixed;
+      font-weight: 700;
+      font-size: 1.2rem;
+      color: #fbbf24;
+      pointer-events: none;
+      animation: floatUp 0.9s ease-out forwards;
+    }
+    @keyframes floatUp {
+      from { opacity: 1; transform: translateY(0); }
+      to   { opacity: 0; transform: translateY(-80px); }
+    }
+  </style>
+</head>
+<body>
+
+<div id='left'>
+  <div id='score'>0 cookies</div>
+  <div id='cps-display'>0 per second</div>
+  <div id='cookie'>🍪</div>
+  <div id='total'>Total: 0 baked</div>
+</div>
+
+<div id='right'>
+  <h2>⚡ Upgrades</h2>
+  <div id='upgrades'></div>
+</div>
+
+<script>
+  let state = { clicks: 0, totalClicks: 0, cps: 0, upgrades: [] };
+
+  async function fetchState() {
+    const r = await fetch('/state');
+    state = await r.json();
+    render();
+  }
+
+  async function doClick() {
+    const r = await fetch('/click', { method: 'POST' });
+    state = await r.json();
+    render();
+  }
+
+  async function buyUpgrade(i) {
+    const r = await fetch('/buy/' + i, { method: 'POST' });
+    state = await r.json();
+    render();
+  }
+
+  function fmt(n) {
+    n = Math.floor(n);
+    if (n >= 1e9) return (n/1e9).toFixed(1) + 'B';
+    if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
+    return n.toString();
+  }
+
+  function render() {
+    document.getElementById('score').textContent = fmt(state.clicks) + ' cookies';
+    document.getElementById('cps-display').textContent = state.cps.toFixed(1) + ' per second';
+    document.getElementById('total').textContent = 'Total baked: ' + fmt(state.totalClicks);
+
+    const box = document.getElementById('upgrades');
+    box.innerHTML = '';
+    state.upgrades.forEach((u, i) => {
+      const affordable = state.clicks >= u.cost;
+      const div = document.createElement('div');
+      div.className = 'upgrade' + (affordable ? ' affordable' : '');
+      div.innerHTML = \`
+        <div class='upgrade-info'>
+          <div class='upgrade-name'>\${u.name}</div>
+          <div class='upgrade-desc'>+\${u.cps} cps &nbsp;·&nbsp; costs \${fmt(u.cost)} 🍪</div>
+        </div>
+        <div class='upgrade-count'>\${u.count}</div>
+        <button class='buy-btn' \${affordable ? '' : 'disabled'} onclick='buyUpgrade(\${i})'>Buy</button>
+      \`;
+      box.appendChild(div);
+    });
+  }
+
+  // Click with floaty text
+  document.getElementById('cookie').addEventListener('click', function(e) {
+    doClick();
+    const span = document.createElement('span');
+    span.className = 'floaty';
+    span.textContent = '+1';
+    span.style.left = (e.clientX - 10) + 'px';
+    span.style.top  = (e.clientY - 20) + 'px';
+    document.body.appendChild(span);
+    setTimeout(() => span.remove(), 900);
+  });
+
+  // Poll state every second (picks up auto-clicker ticks)
+  fetchState();
+  setInterval(fetchState, 1000);
+</script>
+</body>
+</html>"
+
+// ── Routes ─────────────────────────────────────────────────
+server.get("/", fn(req, res) {
+  res.html(PAGE)
+})
+
+server.get("/state", fn(req, res) {
+  res.json({
+    clicks:      clicks,
+    totalClicks: totalClicks,
+    cps:         cps,
+    upgrades:    upgrades
+  })
+})
+
+server.post("/click", fn(req, res) {
+  clicks      = clicks + 1
+  totalClicks = totalClicks + 1
+  res.json({
+    clicks:      clicks,
+    totalClicks: totalClicks,
+    cps:         cps,
+    upgrades:    upgrades
+  })
+})
+
+server.post("/buy/:id", fn(req, res) {
+  let id  = json_decode(req.params.id)
+  let upg = upgrades[id]
+
+  if upg != null && clicks >= upg.cost {
+    clicks      = clicks - upg.cost
+    upg.count   = upg.count + 1
+    upg.cost    = math.floor(upg.cost * 1.15)
+    recalcCps()
+  }
+
+  res.json({
+    clicks:      clicks,
+    totalClicks: totalClicks,
+    cps:         cps,
+    upgrades:    upgrades
+  })
+})
+
+server.listen(fn() {
+  print("🍪 Vexon Clicker running at http://localhost:4000")
+  print("Open that URL in your browser!")
+  print("Press Ctrl+C to stop.")
+})
